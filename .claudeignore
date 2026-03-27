@@ -1,0 +1,27 @@
+# Virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+
+# Git internals
+.git/
+
+# Environment and credential files
+.env
+.env.*
+*.env
+
+# Webull config/credential files
+config.py
+config.json
+config.yaml
+config.yml
+credentials.json
+credentials.yaml
+credentials.yml
+secrets.json
+secrets.yaml
+secrets.yml
+webull_credentials*
+webull_config*
