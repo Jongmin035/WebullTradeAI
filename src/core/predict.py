@@ -1,0 +1,404 @@
+"""
+Daily prediction engine.
+
+Loads the winning model artifacts from disk (downloading from S3 if needed),
+fetches the latest market data for all symbols, and returns a predictions
+DataFrame ready for trader.rebalance().
+
+Returns:
+    DataFrame with columns: symbol, clf_prob, reg_pred
+"""
+
+import os
+import sys
+import logging
+import numpy as np
+import pandas as pd
+
+_src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+for d in (_src, os.path.join(_src, "core"), os.path.join(_src, "pipeline"), os.path.join(_src, "models")):
+    if d not in sys.path:
+        sys.path.insert(0, d)
+
+from data_pipeline import load_all_symbols, INDICATORS_DIR
+from indicators import Indicators
+from model_store import load_artifacts, load_metadata
+from regime_pipeline import fetch_spy_regimes, FEATURES
+
+log = logging.getLogger(__name__)
+
+SEQ_LEN          = 20   # days of history needed per LSTM sequence
+FEATURE_BUFFER   = 250  # extra history days to load so indicators warm up correctly
+RANK_FEATURES    = ["rsi_rank", "volume_rank", "momentum_rank", "zscore20_rank", "volatility10_rank"]
+RANK_SOURCE_COLS = {"rsi_rank": "rsi", "volume_rank": "volume",
+                    "momentum_rank": "momentum", "zscore20_rank": "zscore20",
+                    "volatility10_rank": "volatility10"}
+
+
+# --- Data helpers ---
+
+def _fetch_missing_days(symbols, from_date, to_date):
+    """
+    Batch-download OHLCV for all symbols for days in [from_date, to_date].
+    Returns a dict {symbol: DataFrame} with columns: date, open, high, low, close, volume.
+    Returns empty dict if no data needed.
+    """
+    import yfinance as yf
+    start_str = pd.Timestamp(from_date).strftime("%Y-%m-%d")
+    end_str   = (pd.Timestamp(to_date) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+
+    log.info(f"Fetching {len(symbols)} symbols from yfinance ({start_str} → {end_str})...")
+    raw = yf.download(
+        symbols, start=start_str, end=end_str,
+        auto_adjust=True, progress=False, group_by="ticker",
+    )
+    if raw.empty:
+        return {}
+
+    result = {}
+    for sym in symbols:
+        try:
+            df = raw[sym][["Open", "High", "Low", "Close", "Volume"]].copy()
+            df = df.dropna()
+            df.columns = ["open", "high", "low", "close", "volume"]
+            df.index = pd.to_datetime(df.index)
+            df = df.reset_index().rename(columns={"index": "date", "Date": "date"})
+            df["date"] = pd.to_datetime(df["date"]).dt.normalize()
+            df["symbol"] = sym
+            result[sym] = df
+        except Exception:
+            pass
+    return result
+
+
+def _compute_features_for_new_rows(sym, hist_df, new_rows_df):
+    """
+    Append new_rows_df to hist_df (for buffer), recompute indicators, return
+    only the newly computed rows with all feature columns.
+    """
+    combined = pd.concat([hist_df, new_rows_df]).sort_values("date").reset_index(drop=True)
+    combined["symbol"] = sym
+
+    ind = Indicators(combined)
+    ind.add_sma(20).add_sma(50).add_rsi().add_macd().add_adx(14)
+    feat_df = ind.df.copy()
+
+    feat_df["return_lag1"]     = feat_df["close"].pct_change(1)
+    feat_df["return_lag2"]     = feat_df["close"].pct_change(2)
+    feat_df["return_lag3"]     = feat_df["close"].pct_change(3)
+    feat_df["volatility10"]    = feat_df["return_lag1"].rolling(10).std()
+    feat_df["price_range"]     = (feat_df["high"] - feat_df["low"]) / feat_df["close"]
+    feat_df["close_vs_sma20"]  = feat_df["close"] / feat_df["sma20"] - 1
+    feat_df["close_vs_sma50"]  = feat_df["close"] / feat_df["sma50"] - 1
+    feat_df["zscore20"]        = (
+        (feat_df["close"] - feat_df["sma20"]) /
+        (feat_df["close"].rolling(20).std() + 1e-9)
+    )
+    feat_df["momentum"]        = feat_df["close"].pct_change(20)
+
+    # Keep only new rows
+    cutoff  = new_rows_df["date"].min()
+    new_computed = feat_df[feat_df["date"] >= cutoff].copy()
+    return new_computed
+
+
+def _update_local_parquets(new_rows):
+    """
+    Append newly computed rows to their existing local parquets.
+    Called after fetching missing days so the next daily run only
+    needs to fetch 1 day instead of re-downloading everything.
+    """
+    for sym, grp in new_rows.groupby("symbol"):
+        fpath = os.path.join(INDICATORS_DIR, f"{sym}.parquet")
+        if not os.path.exists(fpath):
+            continue
+        try:
+            existing = pd.read_parquet(fpath)
+            existing["date"] = pd.to_datetime(existing["date"]).dt.normalize()
+            updated = (
+                pd.concat([existing, grp], ignore_index=True)
+                  .drop_duplicates("date")
+                  .sort_values("date")
+                  .reset_index(drop=True)
+            )
+            updated.to_parquet(fpath, index=False)
+        except Exception as e:
+            log.warning(f"Could not update local parquet for {sym}: {e}")
+    log.info(f"Updated {new_rows['symbol'].nunique()} local parquets with new data.")
+
+
+def _merge_sentiment(combined, symbols):
+    """Merge sentiment parquets into combined features. Fills 0.0 when files are missing."""
+    try:
+        sys.path.insert(0, os.path.join(_src, "pipeline"))
+        from sentiment import load_sentiment, SENTIMENT_DIR
+        if not os.path.exists(SENTIMENT_DIR):
+            raise FileNotFoundError
+    except Exception:
+        for col in ["sentiment_1d", "sentiment_3d", "sentiment_7d"]:
+            combined[col] = 0.0
+        return combined
+
+    frames = [load_sentiment(sym) for sym in symbols]
+    frames = [f for f in frames if f is not None]
+
+    if not frames:
+        for col in ["sentiment_1d", "sentiment_3d", "sentiment_7d"]:
+            combined[col] = 0.0
+        return combined
+
+    sent = pd.concat(frames, ignore_index=True)
+    combined = combined.merge(sent, on=["date", "symbol"], how="left")
+    for col in ["sentiment_1d", "sentiment_3d", "sentiment_7d"]:
+        combined[col] = combined[col].fillna(0.0)
+    return combined
+
+
+def _add_rank_features(df):
+    """Compute cross-symbol rank features (0–1) for each date group."""
+    df = df.copy()
+    for rank_col, src_col in RANK_SOURCE_COLS.items():
+        if src_col in df.columns:
+            df[rank_col] = (
+                df.groupby("date")[src_col]
+                  .rank(pct=True)
+            )
+        else:
+            df[rank_col] = 0.5
+    return df
+
+
+def load_latest_features(symbols, window_days=None):
+    """
+    Load the most recent market features for all symbols.
+
+    1. Load the last max(SEQ_LEN + FEATURE_BUFFER, window_days) rows from each parquet.
+    2. Check if today's data is present; if not, fetch missing days via yfinance.
+    3. Recompute indicators for the appended rows.
+    4. Add cross-symbol rank features.
+    5. Return a DataFrame with the latest rows (one per symbol, or SEQ_LEN rows for LSTM).
+
+    Parameters
+    ----------
+    window_days : int or None
+        How many recent days to return per symbol (None = just the latest row).
+    """
+    need_days = max(SEQ_LEN + FEATURE_BUFFER, (window_days or 0) + FEATURE_BUFFER)
+    today     = pd.Timestamp.today().normalize()
+    cutoff    = today - pd.Timedelta(days=need_days)
+
+    # Load from parquets
+    all_dfs = []
+    missing_sym = []
+    for sym in symbols:
+        fpath = os.path.join(INDICATORS_DIR, f"{sym}.parquet")
+        if not os.path.exists(fpath):
+            missing_sym.append(sym)
+            continue
+        df = pd.read_parquet(fpath)
+        df["date"] = pd.to_datetime(df["date"]).dt.normalize()
+        df = df[df["date"] >= cutoff].copy()
+        df["symbol"] = sym
+        all_dfs.append(df)
+
+    if missing_sym:
+        log.warning(f"{len(missing_sym)} symbols have no local parquet — skipping: {missing_sym[:5]}...")
+
+    if not all_dfs:
+        raise RuntimeError("No parquet data found locally. Run retrain.py first to download data.")
+
+    combined = pd.concat(all_dfs, ignore_index=True)
+
+    # Check if recent data is missing (parquets updated weekly)
+    latest_parquet_date = combined["date"].max()
+    yesterday = (today - pd.Timedelta(days=1)).normalize()
+
+    if latest_parquet_date < yesterday:
+        log.info(f"Parquet data ends {latest_parquet_date.date()} — fetching missing days from yfinance...")
+        new_data = _fetch_missing_days(symbols, latest_parquet_date + pd.Timedelta(days=1), today)
+
+        new_rows_list = []
+        for sym in symbols:
+            if sym not in new_data or new_data[sym].empty:
+                continue
+            hist = combined[combined["symbol"] == sym].copy()
+            new_computed = _compute_features_for_new_rows(sym, hist, new_data[sym])
+            new_rows_list.append(new_computed)
+
+        if new_rows_list:
+            new_all = pd.concat(new_rows_list, ignore_index=True)
+            new_all = _add_rank_features(new_all)
+            _update_local_parquets(new_all)
+            combined = pd.concat([combined, new_all], ignore_index=True)
+
+    combined = combined.sort_values(["symbol", "date"]).reset_index(drop=True)
+
+    # Ensure rank features exist (parquets should have them already)
+    for rc in RANK_FEATURES:
+        if rc not in combined.columns:
+            combined = _add_rank_features(combined)
+            break
+
+    # Merge sentiment features from local parquets (fill 0.0 if missing)
+    combined = _merge_sentiment(combined, symbols)
+
+    return combined
+
+
+# --- Prediction functions ---
+
+def _build_lstm_sequences(features_df, scaler):
+    """Build the last SEQ_LEN rows per symbol into (n_symbols, SEQ_LEN, n_features) sequences."""
+    import torch
+    feat_cols = [f for f in FEATURES if f in features_df.columns]
+    seqs, syms = [], []
+
+    for sym, grp in features_df.groupby("symbol"):
+        grp = grp.sort_values("date").dropna(subset=feat_cols)
+        if len(grp) < SEQ_LEN:
+            continue
+        vals = grp[feat_cols].values[-SEQ_LEN:]   # shape: (SEQ_LEN, n_features)
+        seqs.append(vals)
+        syms.append(sym)
+
+    if not seqs:
+        return None, []
+
+    X = np.stack(seqs).astype(np.float32)   # (n, SEQ_LEN, n_features)
+    n, s, f = X.shape
+    X_scaled = scaler.transform(X.reshape(-1, f)).reshape(n, s, f).astype(np.float32)
+    return torch.tensor(X_scaled), syms
+
+
+def _predict_lstm(artifacts, features_df):
+    """Generate predictions using saved LSTM models."""
+    import torch
+
+    clf_model_cfg = artifacts.get("model_config", {"input_dim": len(FEATURES), "hidden_size": 32, "num_layers": 2, "dropout": 0.0})
+
+    # Rebuild LSTM model from state dict
+    class LSTMModel(torch.nn.Module):
+        def __init__(self, cfg, task):
+            super().__init__()
+            self.task = task
+            self.lstm = torch.nn.LSTM(
+                input_size=cfg["input_dim"], hidden_size=cfg["hidden_size"],
+                num_layers=cfg["num_layers"], batch_first=True,
+                dropout=cfg["dropout"] if cfg["num_layers"] > 1 else 0.0,
+            )
+            self.drop = torch.nn.Dropout(cfg["dropout"])
+            self.fc   = torch.nn.Linear(cfg["hidden_size"], 1)
+
+        def forward(self, x):
+            out, _ = self.lstm(x)
+            logit  = self.fc(self.drop(out[:, -1, :])).squeeze(1)
+            return torch.sigmoid(logit) if self.task == "clf" else logit
+
+    clf_model = LSTMModel(clf_model_cfg, "clf")
+    clf_model.load_state_dict(artifacts["clf_state_dict"])
+    clf_model.eval()
+
+    reg_model = LSTMModel(clf_model_cfg, "reg")
+    reg_model.load_state_dict(artifacts["reg_state_dict"])
+    reg_model.eval()
+
+    X_clf, syms = _build_lstm_sequences(features_df, artifacts["clf_scaler"])
+    X_reg, _    = _build_lstm_sequences(features_df, artifacts["reg_scaler"])
+
+    if X_clf is None or len(syms) == 0:
+        return pd.DataFrame(columns=["symbol", "clf_prob", "reg_pred"])
+
+    with torch.no_grad():
+        clf_prob = clf_model(X_clf).numpy()
+        reg_pred = reg_model(X_reg).numpy()
+
+    return pd.DataFrame({"symbol": syms, "clf_prob": clf_prob, "reg_pred": reg_pred})
+
+
+# --- Public API ---
+
+def get_predictions_today(symbols):
+    """
+    Load the winning model and generate predictions for all symbols for today.
+
+    Returns
+    -------
+    DataFrame with columns: symbol, clf_prob, reg_pred
+    """
+    meta = load_metadata()
+    if meta is None:
+        raise RuntimeError(
+            "No model metadata found. Run src/aws/retrain.py first."
+        )
+
+    log.info(f"Using model: lstm  (trained up to {meta['trained_up_to']})")
+
+    artifacts    = load_artifacts("lstm")
+    features_df  = load_latest_features(symbols, window_days=SEQ_LEN + 5)
+
+    preds = _predict_lstm(artifacts, features_df)
+
+    preds = preds.dropna(subset=["clf_prob", "reg_pred"]).reset_index(drop=True)
+    log.info(f"Generated predictions for {len(preds)} symbols")
+    return preds
+
+
+def get_today_regime_vix():
+    """
+    Fetch today's market regime label and VIX level for allocation.
+
+    Returns
+    -------
+    (regime, vix) — regime is 'bull' | 'sideways' | 'bear', vix is float
+    """
+    import yfinance as yf
+
+    today = pd.Timestamp.today().normalize()
+    start = (today - pd.Timedelta(days=300)).strftime("%Y-%m-%d")
+    end   = today.strftime("%Y-%m-%d")
+
+    spy_regimes = fetch_spy_regimes(start, end)
+    regime = spy_regimes.iloc[-1] if not spy_regimes.empty else "sideways"
+
+    try:
+        vix_df = yf.download(
+            "^VIX",
+            start=(today - pd.Timedelta(days=5)).strftime("%Y-%m-%d"),
+            end=end,
+            progress=False,
+            auto_adjust=True,
+        )
+        vix = float(vix_df["Close"].iloc[-1]) if not vix_df.empty else 20.0
+    except Exception:
+        vix = 20.0
+
+    log.info(f"Today's regime: {regime}  VIX: {vix:.1f}")
+    return regime, vix
+
+
+def get_allocation_today(artifacts, regime, vix):
+    """
+    Return today's bucket allocation using allocator params stored in artifacts.
+
+    Falls back to 100% venture if no allocator params are present
+    (e.g., first retrain before walk-forward has enough history).
+
+    Parameters
+    ----------
+    artifacts : dict returned by load_artifacts()
+    regime    : str — 'bull' | 'sideways' | 'bear'
+    vix       : float — current VIX level
+
+    Returns
+    -------
+    dict: venture_pct, safety_pct, hedge_pct, cash_pct
+    """
+    sys.path.insert(0, os.path.join(_src, "models"))
+    from allocator import predict_allocation
+
+    flat_params = artifacts.get("allocator_params")
+    if flat_params is None:
+        log.warning("No allocator_params in artifacts — defaulting to 100% venture")
+        return {"venture_pct": 1.0, "safety_pct": 0.0, "hedge_pct": 0.0, "cash_pct": 0.0}
+
+    return predict_allocation(flat_params, regime, vix)

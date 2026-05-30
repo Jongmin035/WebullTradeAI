@@ -1,0 +1,19 @@
+[Unit]
+Description=WebullTradeAI dashboard API server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/home/ec2-user/WebullTradeAI
+EnvironmentFile=/home/ec2-user/WebullTradeAI/.env
+ExecStart=/home/ec2-user/WebullTradeAI/.venv/bin/python src/core/api_server.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=webull-api
+
+[Install]
+WantedBy=multi-user.target

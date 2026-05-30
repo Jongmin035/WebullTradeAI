@@ -1,0 +1,20 @@
+[Unit]
+Description=WebullTradeAI weekly model retrain
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ec2-user
+WorkingDirectory=/home/ec2-user/WebullTradeAI
+EnvironmentFile=/home/ec2-user/WebullTradeAI/.env
+ExecStart=/home/ec2-user/WebullTradeAI/.venv/bin/python src/aws/retrain.py
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=webull-retrain
+
+# Retrain can take several hours — no timeout
+TimeoutStartSec=infinity
+
+[Install]
+WantedBy=multi-user.target

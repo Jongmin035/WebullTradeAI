@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WebullTradeAI Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0f1117;
+      color: #e0e0e0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      min-height: 100vh;
+    }
+
+    /* Header */
+    #header {
+      background: #1a1f2e;
+      border-bottom: 3px solid #2ecc71;
+      padding: 18px 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      transition: border-color 0.4s, background 0.4s;
+    }
+    #header.error   { background: #2a0a0a; border-color: #e74c3c; }
+    #header.warning { background: #1a1200; border-color: #f39c12; }
+    #header h1 { font-size: 1.3rem; font-weight: 600; letter-spacing: 0.5px; }
+    #status-badge {
+      font-size: 0.8rem; font-weight: 700; padding: 4px 12px;
+      border-radius: 20px; background: #2ecc71; color: #0f1117;
+      text-transform: uppercase; letter-spacing: 1px; transition: background 0.4s;
+    }
+    #status-badge.error   { background: #e74c3c; color: #fff; }
+    #status-badge.warning { background: #f39c12; color: #1a1200; }
+
+    /* Banners */
+    #error-banner, #warning-banner {
+      display: none; padding: 14px 32px; font-size: 0.95rem; font-weight: 500;
+    }
+    #error-banner   { background: #e74c3c; color: #fff; }
+    #warning-banner { background: #f39c12; color: #1a1200; }
+    #error-banner.visible, #warning-banner.visible { display: block; }
+
+    main { padding: 28px 32px; max-width: 1200px; margin: 0 auto; }
+
+    /* Stat cards */
+    #stat-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 16px; margin-bottom: 28px;
+    }
+    .card {
+      background: #1a1f2e; border-radius: 10px;
+      padding: 20px; border: 1px solid #2a2f3e;
+    }
+    .card .label {
+      font-size: 0.75rem; text-transform: uppercase;
+      letter-spacing: 0.8px; color: #7f8c8d; margin-bottom: 8px;
+    }
+    .card .value { font-size: 1.6rem; font-weight: 700; color: #fff; }
+    .card .value.positive { color: #2ecc71; }
+    .card .value.negative { color: #e74c3c; }
+
+    /* Chart */
+    .chart-card {
+      background: #1a1f2e; border-radius: 10px;
+      padding: 24px; border: 1px solid #2a2f3e; margin-bottom: 28px;
+    }
+    .chart-card h2 {
+      font-size: 0.95rem; color: #7f8c8d; margin-bottom: 16px;
+      text-transform: uppercase; letter-spacing: 0.8px;
+    }
+    .chart-card canvas { max-height: 280px; }
+
+    /* Tables */
+    .tables { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    @media (max-width: 700px) { .tables { grid-template-columns: 1fr; } }
+
+    .table-card {
+      background: #1a1f2e; border-radius: 10px;
+      padding: 20px; border: 1px solid #2a2f3e;
+    }
+    .table-card h2 {
+      font-size: 0.95rem; color: #7f8c8d; margin-bottom: 14px;
+      text-transform: uppercase; letter-spacing: 0.8px;
+    }
+
+    table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+    th { text-align: left; color: #7f8c8d; font-weight: 500; padding: 6px 8px; border-bottom: 1px solid #2a2f3e; }
+    td { padding: 8px 8px; border-bottom: 1px solid #1e2330; }
+    tr:last-child td { border-bottom: none; }
+
+    .buy  { color: #2ecc71; font-weight: 600; }
+    .sell { color: #e74c3c; font-weight: 600; }
+
+    #last-updated { font-size: 0.75rem; color: #4a5568; margin-top: 24px; text-align: right; }
+  </style>
+</head>
+<body>
+
+<div id="header">
+  <h1>WebullTradeAI Dashboard</h1>
+  <div style="display:flex;align-items:center;gap:12px">
+    <a href="history.html"
+       style="background:#1a1f2e;color:#2ecc71;border:1px solid #2ecc71;padding:7px 16px;
+              border-radius:6px;font-size:0.82rem;font-weight:600;text-decoration:none;
+              letter-spacing:0.4px;transition:background 0.15s;"
+       onmouseover="this.style.background='#2ecc7122'"
+       onmouseout="this.style.background='#1a1f2e'">
+      History ↗
+    </a>
+    <span id="status-badge">Loading…</span>
+  </div>
+</div>
+
+<div id="error-banner"></div>
+<div id="warning-banner"></div>
+
+<main>
+  <div id="stat-cards">
+    <div class="card"><div class="label">Bot Portfolio Value</div><div class="value" id="stat-net">—</div></div>
+    <div class="card"><div class="label">Bot Market Value</div><div class="value" id="stat-mktval">—</div></div>
+    <div class="card"><div class="label">Bot Cash</div><div class="value" id="stat-cash">—</div></div>
+    <div class="card"><div class="label">Day's P&amp;L (Bot)</div><div class="value" id="stat-day-pnl">—</div></div>
+    <div class="card"><div class="label">Open P&amp;L (Bot)</div><div class="value" id="stat-open-pnl">—</div></div>
+    <div class="card"><div class="label">Cumulative Return</div><div class="value" id="stat-cum-return">—</div></div>
+    <div class="card"><div class="label">Net Account Value</div><div class="value" id="stat-account">—</div><div style="font-size:0.7rem;color:#4a5568;margin-top:3px">full account (incl. manual)</div></div>
+    <div class="card"><div class="label">Initial Capital</div><div class="value" id="stat-initial">—</div></div>
+  </div>
+
+  <div class="chart-card">
+    <h2>Portfolio Value Over Time</h2>
+    <canvas id="chart"></canvas>
+  </div>
+
+  <!-- Performance stats panel -->
+  <div class="chart-card" id="perf-panel" style="margin-bottom:28px">
+    <h2 style="display:flex;align-items:center;justify-content:space-between">
+      <span>Live Performance</span>
+      <span id="perf-asof" style="font-size:0.75rem;color:#4a5568;font-weight:400;text-transform:none;letter-spacing:0"></span>
+    </h2>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin-top:4px">
+      <div class="card" style="padding:14px 16px"><div class="label">Daily Return</div><div class="value" id="perf-daily">—</div></div>
+      <div class="card" style="padding:14px 16px"><div class="label">Monthly Return</div><div class="value" id="perf-monthly">—</div></div>
+      <div class="card" style="padding:14px 16px"><div class="label">Annual Return</div><div class="value" id="perf-annual">—</div></div>
+      <div class="card" style="padding:14px 16px"><div class="label">Sharpe Ratio</div><div class="value" id="perf-sharpe">—</div></div>
+      <div class="card" style="padding:14px 16px"><div class="label">Win Rate</div><div class="value" id="perf-winrate">—</div></div>
+      <div class="card" style="padding:14px 16px"><div class="label">Max Drawdown</div><div class="value" id="perf-drawdown">—</div></div>
+      <div class="card" style="padding:14px 16px"><div class="label">vs SPY (same period)</div><div class="value" id="perf-spy">—</div></div>
+      <div class="card" style="padding:14px 16px"><div class="label">Excess Return</div><div class="value" id="perf-excess">—</div></div>
+    </div>
+    <div id="perf-missing" style="display:none;color:#4a5568;font-size:0.85rem;margin-top:12px">
+      Performance stats not yet available — generated after first weekly retrain.
+    </div>
+  </div>
+
+  <div class="tables">
+    <div class="table-card">
+      <h2>Current Positions</h2>
+      <table>
+        <thead><tr><th>Symbol</th><th>Price</th><th>Mkt Value</th><th>Open P&amp;L</th><th>Day P&amp;L</th><th>Weight</th></tr></thead>
+        <tbody id="positions-table"><tr><td colspan="6" style="color:#4a5568">No data</td></tr></tbody>
+      </table>
+    </div>
+    <div class="table-card">
+      <h2>Recent Trades</h2>
+      <table>
+        <thead><tr><th>Date</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th></tr></thead>
+        <tbody id="trades-table"><tr><td colspan="5" style="color:#4a5568">No data</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div id="last-updated"></div>
+</main>
+
+<script>
+  const STATS_URL = "./stats.json";
+
+  let chart = null;
+
+  function fmt(n, decimals = 2) {
+    return n != null ? n.toFixed(decimals) : "—";
+  }
+
+  function colorClass(val) {
+    if (val == null) return "";
+    return val >= 0 ? "positive" : "negative";
+  }
+
+  function pnlText(val) {
+    if (val == null) return "—";
+    return (val >= 0 ? "+$" : "-$") + Math.abs(val).toFixed(2);
+  }
+
+  function render(stats) {
+    const isError   = stats.status === "error";
+    const isWarning = stats.status === "warning";
+    const header    = document.getElementById("header");
+    const badge     = document.getElementById("status-badge");
+    const errBanner  = document.getElementById("error-banner");
+    const warnBanner = document.getElementById("warning-banner");
+
+    header.classList.toggle("error",   isError);
+    header.classList.toggle("warning", isWarning);
+    badge.classList.toggle("error",    isError);
+    badge.classList.toggle("warning",  isWarning);
+    badge.textContent = isError   ? "ERROR — Trading Halted"
+                      : isWarning ? "RETRYING…"
+                      : "RUNNING";
+
+    if (isError && stats.error_message) {
+      errBanner.textContent = "⚠ " + stats.error_message;
+      errBanner.classList.add("visible");
+    } else {
+      errBanner.classList.remove("visible");
+    }
+
+    if (isWarning && stats.warning_message) {
+      warnBanner.textContent = "⚠ " + stats.warning_message;
+      warnBanner.classList.add("visible");
+    } else {
+      warnBanner.classList.remove("visible");
+    }
+
+    const validHistory = (stats.history || []).filter(h => !h.error);
+    const latest = validHistory[validHistory.length - 1];
+
+    if (latest) {
+      const set = (id, text, cls) => {
+        const el = document.getElementById(id);
+        el.textContent = text;
+        if (cls) el.className = "value " + cls;
+      };
+
+      set("stat-net",      "$" + fmt(latest.effective_portfolio_value ?? latest.portfolio_value));
+      set("stat-mktval",   "$" + fmt(latest.bot_market_value ?? latest.market_value));
+      set("stat-cash",     "$" + fmt(latest.bot_cash ?? latest.cash_balance));
+      set("stat-day-pnl",  pnlText(latest.bot_day_pnl  ?? latest.day_pnl),  colorClass(latest.bot_day_pnl  ?? latest.day_pnl));
+      set("stat-open-pnl", pnlText(latest.bot_open_pnl ?? latest.open_pnl), colorClass(latest.bot_open_pnl ?? latest.open_pnl));
+
+      const cum = latest.cumulative_return_pct;
+      set("stat-cum-return",
+        cum != null ? (cum >= 0 ? "+" : "") + fmt(cum) + "%" : "—",
+        colorClass(cum));
+
+      document.getElementById("stat-account").textContent =
+        latest.net_account_value != null ? "$" + fmt(latest.net_account_value) : "—";
+      document.getElementById("stat-initial").textContent =
+        stats.initial_capital != null ? "$" + fmt(stats.initial_capital) : "—";
+
+      // Positions table
+      const posBody = document.getElementById("positions-table");
+      const posList = Object.entries(latest.positions || {});
+      if (posList.length === 0) {
+        posBody.innerHTML = `<tr><td colspan="6" style="color:#4a5568">No open positions</td></tr>`;
+      } else {
+        posBody.innerHTML = posList
+          .sort((a, b) => (b[1].market_value ?? 0) - (a[1].market_value ?? 0))
+          .map(([sym, d]) => {
+            const weight  = typeof d === "number" ? d : d.weight;
+            const mktval  = d.market_value != null ? "$" + fmt(d.market_value)  : "—";
+            const price   = d.price        != null ? "$" + fmt(d.price)          : "—";
+            const openPnl = d.open_pnl     != null ? pnlText(d.open_pnl)        : "—";
+            const dayPnl  = d.day_pnl      != null ? pnlText(d.day_pnl)         : "—";
+            const oPnlCls = d.open_pnl     != null ? colorClass(d.open_pnl)     : "";
+            const dPnlCls = d.day_pnl      != null ? colorClass(d.day_pnl)      : "";
+            return `<tr>
+              <td>${sym}</td><td>${price}</td><td>${mktval}</td>
+              <td class="${oPnlCls}">${openPnl}</td>
+              <td class="${dPnlCls}">${dayPnl}</td>
+              <td>${(weight * 100).toFixed(1)}%</td>
+            </tr>`;
+          }).join("");
+      }
+    }
+
+    // Recent trades
+    const allTrades = [];
+    for (const h of validHistory) {
+      for (const t of (h.trades || [])) allTrades.push({ date: h.date, ...t });
+    }
+    allTrades.reverse();
+    const tradesBody = document.getElementById("trades-table");
+    if (allTrades.length === 0) {
+      tradesBody.innerHTML = `<tr><td colspan="5" style="color:#4a5568">No trades yet</td></tr>`;
+    } else {
+      tradesBody.innerHTML = allTrades.slice(0, 10).map(t =>
+        `<tr>
+          <td>${t.date}</td><td>${t.symbol}</td>
+          <td class="${t.side.toLowerCase()}">${t.side}</td>
+          <td>${t.quantity}</td><td>$${fmt(t.price)}</td>
+        </tr>`
+      ).join("");
+    }
+
+    // Chart
+    const labels  = validHistory.map(h => h.date);
+    const values  = validHistory.map(h => h.effective_portfolio_value);
+    const initial = stats.initial_capital;
+
+    if (chart) chart.destroy();
+    const ctx = document.getElementById("chart").getContext("2d");
+    chart = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels,
+        datasets: [
+          {
+            label: "Portfolio Value ($)",
+            data: values,
+            borderColor: isError ? "#e74c3c" : isWarning ? "#f39c12" : "#2ecc71",
+            backgroundColor: isError ? "rgba(231,76,60,0.08)" : isWarning ? "rgba(243,156,18,0.08)" : "rgba(46,204,113,0.08)",
+            borderWidth: 2,
+            pointRadius: values.length > 60 ? 0 : 3,
+            tension: 0.3,
+            fill: true,
+          },
+          ...(initial != null ? [{
+            label: "Initial Capital ($)",
+            data: labels.map(() => initial),
+            borderColor: "#4a5568", borderWidth: 1,
+            borderDash: [6, 4], pointRadius: 0, fill: false,
+          }] : []),
+        ],
+      },
+      options: {
+        responsive: true,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { labels: { color: "#7f8c8d", font: { size: 12 } } },
+          tooltip: { backgroundColor: "#1a1f2e", titleColor: "#e0e0e0", bodyColor: "#7f8c8d" },
+        },
+        scales: {
+          x: { ticks: { color: "#4a5568", maxTicksLimit: 10 }, grid: { color: "#1e2330" } },
+          y: { ticks: { color: "#4a5568" }, grid: { color: "#1e2330" } },
+        },
+      },
+    });
+
+    const latest2 = (stats.history || []).slice(-1)[0];
+    if (latest2) {
+      document.getElementById("last-updated").textContent =
+        "Last updated: " + latest2.timestamp;
+    }
+  }
+
+  async function loadAndRender() {
+    try {
+      const res = await fetch(STATS_URL + "?t=" + Date.now());
+      if (!res.ok) throw new Error("stats.json not found");
+      render(await res.json());
+    } catch {
+      document.getElementById("status-badge").textContent = "No Data";
+    }
+  }
+
+  // Poll S3 every 60 seconds
+  setInterval(loadAndRender, 60 * 1000);
+  loadAndRender();
+
+  // Performance stats (updated weekly by retrain)
+  function fmtPct(val) {
+    if (val == null) return "—";
+    return (val >= 0 ? "+" : "") + (val * 100).toFixed(2) + "%";
+  }
+
+  function renderPerformance(p) {
+    const set = (id, text, positive) => {
+      const el = document.getElementById(id);
+      el.textContent = text;
+      el.className = "value" + (positive === true ? " positive" : positive === false ? " negative" : "");
+    };
+    document.getElementById("perf-asof").textContent =
+      p.as_of ? `Updated ${p.as_of} · ${p.days_live} days live` : "";
+    const sign = v => v == null ? null : v >= 0;
+    set("perf-daily",    fmtPct(p.daily_return),    sign(p.daily_return));
+    set("perf-monthly",  fmtPct(p.monthly_return),  sign(p.monthly_return));
+    set("perf-annual",   fmtPct(p.annual_return),   sign(p.annual_return));
+    set("perf-sharpe",   p.sharpe_ratio != null ? p.sharpe_ratio.toFixed(2) : "—", sign(p.sharpe_ratio));
+    set("perf-winrate",  p.win_rate != null ? (p.win_rate * 100).toFixed(1) + "%" : "—");
+    set("perf-drawdown", p.max_drawdown != null ? "-" + (p.max_drawdown * 100).toFixed(2) + "%" : "—",
+        p.max_drawdown != null ? p.max_drawdown === 0 : null);
+    set("perf-spy",      fmtPct(p.spy_return_same_period), sign(p.spy_return_same_period));
+    set("perf-excess",   fmtPct(p.excess_return),   sign(p.excess_return));
+    document.getElementById("perf-missing").style.display = "none";
+  }
+
+  async function loadPerformance() {
+    try {
+      const res = await fetch("./performance_stats.json?t=" + Date.now());
+      if (!res.ok) throw new Error();
+      renderPerformance(await res.json());
+    } catch {
+      document.getElementById("perf-missing").style.display = "block";
+    }
+  }
+
+  loadPerformance();
+  setInterval(loadPerformance, 60 * 60 * 1000);
+</script>
+</body>
+</html>

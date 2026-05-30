@@ -1,0 +1,13 @@
+[Unit]
+Description=Run WebullTradeAI weekly model retrain every Sunday night
+Requires=retrain.service
+
+[Timer]
+# Saturday 12:00 UTC = 8:00 AM ET = 5:00 AM PT
+# Retrain takes ~3-4 hrs on g5.xlarge — done well before Sunday
+OnCalendar=Sat 12:00:00 UTC
+AccuracySec=60
+Persistent=true
+
+[Install]
+WantedBy=timers.target

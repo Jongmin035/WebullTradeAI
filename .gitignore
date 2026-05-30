@@ -1,0 +1,30 @@
+# Secrets & credentials — never commit
+.env
+.env.*
+secrets.py
+config_local.py
+credentials.json
+credentials.yaml
+credentials.yml
+*.key
+*.pem
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+
+# Data & model artifacts
+src/data/
+*.csv
+*.pkl
+*.h5
+
+# Claude
+.claude/
