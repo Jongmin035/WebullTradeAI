@@ -29,9 +29,9 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=webull-bot
 
-# Shutdown after trading — but only if the retrain is not also running.
-# On Saturdays both timers fire (Persistent=true); retrain handles its own shutdown.
-ExecStopPost=/bin/bash -c 'systemctl is-active --quiet retrain.service || sudo /sbin/shutdown -h now'
+# On Saturdays (day 6), retrain handles its own shutdown — don't race with it.
+# On all other days, shut down after trading to avoid idle EC2 costs.
+ExecStopPost=/bin/bash -c 'if [ "$(date +%%u)" = "6" ]; then exit 0; fi; sudo /sbin/shutdown -h now'
 
 [Install]
 WantedBy=multi-user.target
