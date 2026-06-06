@@ -1,14 +1,16 @@
 #!/bin/bash
-# Runs on every boot (via config-pull.service) before bot.timer / retrain.timer fire.
-# Downloads the latest service files from S3 so changes made locally take effect
-# without requiring SSH access to the instance.
+# Runs on every boot via config-pull.service (Before=bot.timer / retrain.timer).
+# Downloads the latest service files from S3 so changes take effect without SSH.
 set -euo pipefail
 
 ENV_FILE=/home/ec2-user/WebullTradeAI/.env
 BUCKET=$(grep '^AWS_S3_BUCKET=' "$ENV_FILE" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d "'")
+export AWS_ACCESS_KEY_ID=$(grep '^AWS_ACCESS_KEY_ID=' "$ENV_FILE" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d "'")
+export AWS_SECRET_ACCESS_KEY=$(grep '^AWS_SECRET_ACCESS_KEY=' "$ENV_FILE" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d "'")
+export AWS_DEFAULT_REGION=$(grep '^AWS_REGION=' "$ENV_FILE" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d "'")
 
-if [ -z "$BUCKET" ]; then
-    echo "config-pull: AWS_S3_BUCKET not found in .env — skipping"
+if [ -z "$BUCKET" ] || [ -z "$AWS_ACCESS_KEY_ID" ]; then
+    echo "config-pull: missing bucket or credentials in .env — skipping"
     exit 0
 fi
 
