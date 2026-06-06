@@ -123,9 +123,15 @@ def check_stop_losses(current_prices):
     """
     highs = load_position_highs()
     triggered = {}
+    new_positions = []
+
     for sym, price in current_prices.items():
         if sym not in highs:
-            continue   # no history yet (new position this session)
+            # First time seeing this position — start tracking from today's price.
+            # Don't trigger a stop yet: we have no historical reference.
+            highs[sym] = price
+            new_positions.append(sym)
+            continue
         high = highs[sym]
         atr  = _compute_atr(sym)
         if atr is not None:
@@ -139,6 +145,11 @@ def check_stop_losses(current_prices):
                 f"STOP-LOSS {sym}: price ${price:.2f} ≤ stop ${stop_price:.2f} "
                 f"(high ${high:.2f}, drawdown {drawdown:.1%}) — forcing full exit"
             )
+
+    if new_positions:
+        log.info(f"Stop-loss: started tracking new positions at today's price: {new_positions}")
+        save_position_highs(highs)
+
     return triggered
 
 

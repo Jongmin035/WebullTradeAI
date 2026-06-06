@@ -59,7 +59,7 @@ def _is_market_open():
 
 def main(dry_run=False):
     from dashboard_logger import restore_state_from_s3, log_warning
-    from data_pipeline import fetch_sp500_symbols
+    from data_pipeline import fetch_sp500_symbols, ETF_SYMBOLS
     from model_store import load_artifacts, load_metadata
     from predict import get_predictions_today, get_today_regime_vix, get_allocation_today
     from trader import Trader
@@ -74,8 +74,8 @@ def main(dry_run=False):
     restore_state_from_s3()
 
     # 2. Load symbol list
-    symbols = fetch_sp500_symbols()
-    log.info(f"Universe: {len(symbols)} symbols")
+    symbols = list(set(fetch_sp500_symbols()) | set(ETF_SYMBOLS))
+    log.info(f"Universe: {len(symbols)} symbols ({len(ETF_SYMBOLS)} ETFs included)")
 
     # 3. Generate today's predictions using the current winning model
     log.info("Generating predictions...")

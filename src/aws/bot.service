@@ -29,8 +29,9 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=webull-bot
 
-# Shutdown after trading to avoid paying for idle EC2 time
-ExecStopPost=sudo /sbin/shutdown -h now
+# Shutdown after trading — but only if the retrain is not also running.
+# On Saturdays both timers fire (Persistent=true); retrain handles its own shutdown.
+ExecStopPost=/bin/bash -c 'systemctl is-active --quiet retrain.service || sudo /sbin/shutdown -h now'
 
 [Install]
 WantedBy=multi-user.target

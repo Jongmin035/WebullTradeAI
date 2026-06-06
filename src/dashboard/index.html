@@ -97,6 +97,24 @@
     .sell { color: #e74c3c; font-weight: 600; }
 
     #last-updated { font-size: 0.75rem; color: #4a5568; margin-top: 24px; text-align: right; }
+
+    .chart-btn {
+      background: #0f1117; color: #7f8c8d; border: 1px solid #2a2f3e;
+      padding: 5px 14px; border-radius: 6px; font-size: 0.8rem;
+      cursor: pointer; transition: all 0.15s;
+    }
+    .chart-btn.active { background: #2ecc71; color: #0f1117; border-color: #2ecc71; font-weight: 600; }
+    .chart-btn:hover:not(.active) { border-color: #4a5568; color: #e0e0e0; }
+
+    .index-btn {
+      background: #0f1117; color: #7f8c8d; border: 1px solid #2a2f3e;
+      padding: 4px 12px; border-radius: 6px; font-size: 0.78rem;
+      cursor: pointer; transition: all 0.15s;
+    }
+    .index-btn:hover:not(.active) { border-color: #4a5568; color: #e0e0e0; }
+    .index-btn.active[data-ticker="SPY"] { background: rgba(52,152,219,0.15); color: #3498db; border-color: #3498db; }
+    .index-btn.active[data-ticker="DIA"] { background: rgba(155,89,182,0.15); color: #9b59b6; border-color: #9b59b6; }
+    .index-btn.active[data-ticker="QQQ"] { background: rgba(230,126,34,0.15);  color: #e67e22; border-color: #e67e22; }
   </style>
 </head>
 <body>
@@ -132,7 +150,19 @@
   </div>
 
   <div class="chart-card">
-    <h2>Portfolio Value Over Time</h2>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+      <h2 style="margin:0">Portfolio Value Over Time</h2>
+      <div style="display:flex;align-items:center;gap:6px">
+        <button class="chart-btn active" id="mode-dollar">$ Value</button>
+        <button class="chart-btn" id="mode-pct">% Return</button>
+      </div>
+    </div>
+    <div id="index-selectors" style="display:none;gap:6px;margin-bottom:14px">
+      <span style="font-size:0.75rem;color:#4a5568;align-self:center">Compare:</span>
+      <button class="index-btn" data-ticker="SPY">S&amp;P 500</button>
+      <button class="index-btn" data-ticker="DIA">Dow Jones</button>
+      <button class="index-btn" data-ticker="QQQ">NASDAQ</button>
+    </div>
     <canvas id="chart"></canvas>
   </div>
 
@@ -181,6 +211,15 @@
   const STATS_URL = "./stats.json";
 
   let chart = null;
+  let lastStats = null;
+  let chartMode = "dollar";   // "dollar" | "pct"
+  let selectedIndexes = new Set();
+
+  const INDEX_CONFIG = {
+    SPY: { label: "S&P 500",   color: "#3498db" },
+    DIA: { label: "Dow Jones", color: "#9b59b6" },
+    QQQ: { label: "NASDAQ",    color: "#e67e22" },
+  };
 
   function fmt(n, decimals = 2) {
     return n != null ? n.toFixed(decimals) : "—";
@@ -298,48 +337,8 @@
     }
 
     // Chart
-    const labels  = validHistory.map(h => h.date);
-    const values  = validHistory.map(h => h.effective_portfolio_value);
-    const initial = stats.initial_capital;
-
-    if (chart) chart.destroy();
-    const ctx = document.getElementById("chart").getContext("2d");
-    chart = new Chart(ctx, {
-      type: "line",
-      data: {
-        labels,
-        datasets: [
-          {
-            label: "Portfolio Value ($)",
-            data: values,
-            borderColor: isError ? "#e74c3c" : isWarning ? "#f39c12" : "#2ecc71",
-            backgroundColor: isError ? "rgba(231,76,60,0.08)" : isWarning ? "rgba(243,156,18,0.08)" : "rgba(46,204,113,0.08)",
-            borderWidth: 2,
-            pointRadius: values.length > 60 ? 0 : 3,
-            tension: 0.3,
-            fill: true,
-          },
-          ...(initial != null ? [{
-            label: "Initial Capital ($)",
-            data: labels.map(() => initial),
-            borderColor: "#4a5568", borderWidth: 1,
-            borderDash: [6, 4], pointRadius: 0, fill: false,
-          }] : []),
-        ],
-      },
-      options: {
-        responsive: true,
-        interaction: { mode: "index", intersect: false },
-        plugins: {
-          legend: { labels: { color: "#7f8c8d", font: { size: 12 } } },
-          tooltip: { backgroundColor: "#1a1f2e", titleColor: "#e0e0e0", bodyColor: "#7f8c8d" },
-        },
-        scales: {
-          x: { ticks: { color: "#4a5568", maxTicksLimit: 10 }, grid: { color: "#1e2330" } },
-          y: { ticks: { color: "#4a5568" }, grid: { color: "#1e2330" } },
-        },
-      },
-    });
+    lastStats = stats;
+    renderChart();
 
     const latest2 = (stats.history || []).slice(-1)[0];
     if (latest2) {
@@ -347,6 +346,121 @@
         "Last updated: " + latest2.timestamp;
     }
   }
+
+  function renderChart() {
+    if (!lastStats) return;
+    const stats      = lastStats;
+    const isError    = stats.status === "error";
+    const isWarning  = stats.status === "warning";
+    const validHistory = (stats.history || []).filter(h => !h.error);
+    const labels     = validHistory.map(h => h.date);
+    const initial    = stats.initial_capital;
+    const botColor   = isError ? "#e74c3c" : isWarning ? "#f39c12" : "#2ecc71";
+    const botBg      = isError ? "rgba(231,76,60,0.08)" : isWarning ? "rgba(243,156,18,0.08)" : "rgba(46,204,113,0.08)";
+    const noPts      = labels.length > 60;
+    const datasets   = [];
+
+    if (chartMode === "dollar") {
+      const values = validHistory.map(h => h.effective_portfolio_value);
+      datasets.push({
+        label: "Portfolio Value ($)", data: values,
+        borderColor: botColor, backgroundColor: botBg,
+        borderWidth: 2, pointRadius: noPts ? 0 : 3, tension: 0.3, fill: true,
+      });
+      if (initial != null) datasets.push({
+        label: "Initial Capital ($)", data: labels.map(() => initial),
+        borderColor: "#4a5568", borderWidth: 1, borderDash: [6, 4], pointRadius: 0, fill: false,
+      });
+    } else {
+      const pcts = validHistory.map(h => h.cumulative_return_pct ?? null);
+      datasets.push({
+        label: "Bot Return (%)", data: pcts,
+        borderColor: botColor, backgroundColor: botBg,
+        borderWidth: 2, pointRadius: noPts ? 0 : 3, tension: 0.3, fill: true,
+      });
+      datasets.push({
+        label: "0%", data: labels.map(() => 0),
+        borderColor: "#4a5568", borderWidth: 1, borderDash: [6, 4], pointRadius: 0, fill: false,
+      });
+      const indexHistory = stats.index_history || {};
+      for (const ticker of selectedIndexes) {
+        const cfg  = INDEX_CONFIG[ticker];
+        const map  = Object.fromEntries((indexHistory[ticker] || []).map(d => [d.date, d.pct]));
+        datasets.push({
+          label: cfg.label, data: labels.map(d => map[d] ?? null),
+          borderColor: cfg.color, borderWidth: 1.5,
+          pointRadius: 0, tension: 0.3, fill: false,
+        });
+      }
+    }
+
+    if (chart) chart.destroy();
+    const ctx = document.getElementById("chart").getContext("2d");
+    chart = new Chart(ctx, {
+      type: "line",
+      data: { labels, datasets },
+      options: {
+        responsive: true,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { labels: { color: "#7f8c8d", font: { size: 12 } } },
+          tooltip: {
+            backgroundColor: "#1a1f2e", titleColor: "#e0e0e0", bodyColor: "#7f8c8d",
+            callbacks: {
+              label: (ctx) => {
+                const v = ctx.parsed.y;
+                if (v == null) return null;
+                return chartMode === "pct"
+                  ? ` ${ctx.dataset.label}: ${v >= 0 ? "+" : ""}${v.toFixed(2)}%`
+                  : ` ${ctx.dataset.label}: $${v.toFixed(2)}`;
+              },
+            },
+          },
+        },
+        scales: {
+          x: { ticks: { color: "#4a5568", maxTicksLimit: 10 }, grid: { color: "#1e2330" } },
+          y: {
+            ticks: {
+              color: "#4a5568",
+              callback: v => chartMode === "pct" ? v.toFixed(1) + "%" : "$" + v.toLocaleString(),
+            },
+            grid: { color: "#1e2330" },
+          },
+        },
+      },
+    });
+  }
+
+  // Toggle: $ / %
+  document.getElementById("mode-dollar").addEventListener("click", () => {
+    chartMode = "dollar";
+    document.getElementById("mode-dollar").classList.add("active");
+    document.getElementById("mode-pct").classList.remove("active");
+    document.getElementById("index-selectors").style.display = "none";
+    renderChart();
+  });
+  document.getElementById("mode-pct").addEventListener("click", () => {
+    chartMode = "pct";
+    document.getElementById("mode-pct").classList.add("active");
+    document.getElementById("mode-dollar").classList.remove("active");
+    document.getElementById("index-selectors").style.display = "flex";
+    renderChart();
+  });
+
+  // Index selector buttons
+  document.querySelectorAll(".index-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const ticker = btn.dataset.ticker;
+      if (selectedIndexes.has(ticker)) {
+        selectedIndexes.delete(ticker);
+        btn.classList.remove("active");
+      } else {
+        selectedIndexes.add(ticker);
+        btn.classList.add("active");
+      }
+      renderChart();
+    });
+  });
 
   async function loadAndRender() {
     try {

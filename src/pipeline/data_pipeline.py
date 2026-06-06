@@ -51,6 +51,9 @@ FEATURES = [
 ]
 
 
+ETF_SYMBOLS = ["SPY", "QQQ", "XLP", "XLV", "XLU", "GLD", "XLI", "IWM"]
+
+
 # --- S&P 500 symbols ---
 
 def fetch_sp500_symbols():
@@ -302,8 +305,8 @@ def main():
     parser.add_argument("--end-year",   type=int, default=END_YEAR)
     args = parser.parse_args()
 
-    symbols = args.symbols or fetch_sp500_symbols()
-    print(f"Processing {len(symbols)} symbols...\n")
+    symbols = list(set(args.symbols or fetch_sp500_symbols()) | set(ETF_SYMBOLS))
+    print(f"Processing {len(symbols)} symbols (includes {len(ETF_SYMBOLS)} ETFs)...\n")
 
     # Fetch VIX once for all symbols (avoid 500 redundant downloads)
     vix_df = None

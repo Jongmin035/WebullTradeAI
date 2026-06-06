@@ -36,7 +36,7 @@ for d in (SRC_DIR, os.path.join(SRC_DIR, "core"), os.path.join(SRC_DIR, "pipelin
 
 load_dotenv(dotenv_path=os.path.join(ROOT_DIR, ".env"))
 
-from data_pipeline import load_all_symbols, fetch_sp500_symbols, INDICATORS_DIR
+from data_pipeline import load_all_symbols, fetch_sp500_symbols, ETF_SYMBOLS, INDICATORS_DIR
 from sentiment import download_from_s3 as download_sentiment, update_all as update_sentiment
 from backtest import run_backtest
 from regime_pipeline import fetch_spy_regimes, FEATURES
@@ -434,9 +434,10 @@ if __name__ == "__main__":
     log.info("\n--- Downloading data from S3 ---")
     download_data_from_s3()
 
-    symbols   = TEST_SYMBOLS if args.test else fetch_sp500_symbols()
-    ALL_YEARS = TEST_YEARS   if args.test else ALL_YEARS
-    log.info(f"Symbols: {len(symbols)}  |  Years: {ALL_YEARS[0]}–{ALL_YEARS[-1]}")
+    base_symbols = TEST_SYMBOLS if args.test else fetch_sp500_symbols()
+    symbols      = list(set(base_symbols) | set(ETF_SYMBOLS))
+    ALL_YEARS    = TEST_YEARS if args.test else ALL_YEARS
+    log.info(f"Symbols: {len(symbols)} ({len(ETF_SYMBOLS)} ETFs included)  |  Years: {ALL_YEARS[0]}–{ALL_YEARS[-1]}")
 
     log.info("\n--- Refreshing sentiment data ---")
     download_sentiment()          # pull existing parquets from S3 (skips already-present files)

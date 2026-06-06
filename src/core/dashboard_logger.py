@@ -178,6 +178,37 @@ def restore_state_from_s3():
         log.warning(f"State restore from S3 failed: {e}")
 
 
+# --- Index comparison ---
+
+def _fetch_index_history(start_date_str):
+    """
+    Fetch cumulative % return for SPY, DIA, QQQ from start_date_str to today.
+    Returns dict {ticker: [{date, pct}, ...]} or {} on failure.
+    Called once per daily rebalance — result stored in stats.json.
+    """
+    try:
+        import pandas as pd
+        import yfinance as yf
+        result = {}
+        for ticker in ["SPY", "DIA", "QQQ"]:
+            hist = yf.Ticker(ticker).history(start=start_date_str, auto_adjust=True)
+            if hist.empty or len(hist) < 2:
+                continue
+            closes = hist["Close"].copy()
+            closes.index = pd.to_datetime(closes.index).tz_localize(None)
+            base = float(closes.iloc[0])
+            if base == 0:
+                continue
+            result[ticker] = [
+                {"date": d.strftime("%Y-%m-%d"), "pct": round((float(c) - base) / base * 100, 4)}
+                for d, c in closes.items()
+            ]
+        return result
+    except Exception as e:
+        log.warning(f"Could not fetch index history: {e}")
+        return {}
+
+
 # --- CSV helpers ---
 
 def _save_balance_history(today_str, cash_balance, market_value):
@@ -319,6 +350,10 @@ def log_rebalance(account, effective_pv, bot_positions, manual_positions, trades
     # Write CSVs first so history.html (generated inside _save_stats) has today's data.
     _save_balance_history(today, bot_cash, bot_market_value)
     _append_trades(trades, today, entry["timestamp"])
+
+    # Fetch benchmark index returns from the bot's start date (stored for chart overlay).
+    first_date = next((h["date"] for h in stats["history"] if not h.get("error")), today)
+    stats["index_history"] = _fetch_index_history(first_date)
 
     _save_stats(stats)
 

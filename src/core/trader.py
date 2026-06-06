@@ -49,8 +49,9 @@ load_dotenv()
 REBALANCE_THRESHOLD    = 0.02  # minimum weight delta to trigger a trade
 HALF_KELLY             = True
 MIN_TRADE_VALUE        = 1.0   # ignore positions worth less than $1 (rounding)
-MAX_CAPITAL            = None   # None = full account control
-MAX_VENTURE_POSITIONS  = 15    # top-N stocks by Kelly; keeps each position >= 2% of portfolio
+MAX_CAPITAL            = None  # None = full account control
+CLF_PROB_THRESHOLD     = 0.60  # minimum model confidence to include a position
+MIN_POSITION_WEIGHT    = 0.03  # drop positions that would be < 3% of portfolio
 
 SAFETY_ETFS = ["SPY", "XLP", "XLU"]
 HEDGE_ETFS  = ["GLDM", "SH", "SQQQ"]
@@ -312,7 +313,7 @@ class Trader:
         hedge_pct   = allocation["hedge_pct"]   if allocation else 0.0
 
         candidates = predictions_today[
-            (predictions_today["clf_prob"] > 0.5) &
+            (predictions_today["clf_prob"] >= CLF_PROB_THRESHOLD) &
             (predictions_today["reg_pred"] > 0)
         ].copy()
 
@@ -321,15 +322,18 @@ class Trader:
             axis=1,
         )
         candidates = candidates[candidates["kelly"] > 0]
-        candidates = candidates.nlargest(MAX_VENTURE_POSITIONS, "kelly")
 
         target = {}
 
         if not candidates.empty:
             total_kelly = candidates["kelly"].sum()
             for _, row in candidates.iterrows():
-                normalized = row["kelly"] / max(1.0, total_kelly)
-                target[row["symbol"]] = normalized * venture_pct
+                # Proportional Kelly: each position gets its natural share of venture_pct.
+                # Positions below the minimum floor are excluded; remaining capital stays cash.
+                weight = (row["kelly"] / total_kelly) * venture_pct
+                if weight < MIN_POSITION_WEIGHT:
+                    continue
+                target[row["symbol"]] = weight
 
         if safety_pct > 0:
             per_etf = safety_pct / len(SAFETY_ETFS)

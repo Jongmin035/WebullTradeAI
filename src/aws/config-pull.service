@@ -1,0 +1,16 @@
+[Unit]
+Description=Pull latest service configs from S3
+After=network-online.target
+Wants=network-online.target
+Before=bot.timer retrain.timer
+
+[Service]
+Type=oneshot
+ExecStart=/home/ec2-user/WebullTradeAI/src/aws/startup.sh
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=config-pull
+
+[Install]
+WantedBy=multi-user.target
