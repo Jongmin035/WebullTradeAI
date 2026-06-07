@@ -16,6 +16,8 @@ import json
 import logging
 import os
 import sys
+import time
+import traceback
 from datetime import datetime
 
 import joblib
@@ -51,6 +53,82 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 log = logging.getLogger(__name__)
+
+# ============================================================
+# Retrain run log  (saved to S3 after every run)
+# ============================================================
+
+class RetrainLog:
+    """Structured log written to s3://<bucket>/retrain/last_run.json after every run."""
+
+    def __init__(self, mode="full"):
+        self._t       = None
+        self._current = None
+        self.data = {
+            "mode":        mode,
+            "started_at":  datetime.utcnow().isoformat() + "Z",
+            "finished_at": None,
+            "status":      "running",
+            "steps":       [],
+            "error":       None,
+        }
+
+    def begin_step(self, name):
+        self._t       = time.time()
+        self._current = name
+
+    def end_step(self, **metrics):
+        self.data["steps"].append({
+            "name":       self._current,
+            "status":     "ok",
+            "duration_s": round(time.time() - self._t, 1),
+            **{k: v for k, v in metrics.items() if v is not None},
+        })
+        self._current = None
+
+    def skip_step(self, reason=""):
+        self.data["steps"].append({
+            "name":   self._current,
+            "status": "skipped",
+            "reason": reason,
+        })
+        self._current = None
+
+    def fail(self, exc):
+        self.data["steps"].append({
+            "name":       self._current or "unknown",
+            "status":     "failed",
+            "duration_s": round(time.time() - self._t, 1) if self._t else None,
+            "error":      str(exc),
+        })
+        self.data["status"]      = "failed"
+        self.data["finished_at"] = datetime.utcnow().isoformat() + "Z"
+        self.data["error"] = {
+            "step":      self._current or "unknown",
+            "type":      type(exc).__name__,
+            "message":   str(exc),
+            "traceback": traceback.format_exc(),
+        }
+
+    def finish(self):
+        self.data["status"]      = "success"
+        self.data["finished_at"] = datetime.utcnow().isoformat() + "Z"
+
+    def save(self, bucket):
+        if self.data["finished_at"] is None:
+            self.data["finished_at"] = datetime.utcnow().isoformat() + "Z"
+        try:
+            import boto3
+            boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1")).put_object(
+                Bucket=bucket,
+                Key="retrain/last_run.json",
+                Body=json.dumps(self.data, indent=2, default=str).encode(),
+                ContentType="application/json",
+            )
+            log.info(f"Retrain log saved → s3://{bucket}/retrain/last_run.json")
+        except Exception as e:
+            log.warning(f"Could not save retrain log to S3: {e}")
+
 
 # --- Config ---
 ALL_YEARS        = list(range(2006, pd.Timestamp.today().year + 1))
@@ -423,6 +501,10 @@ if __name__ == "__main__":
     TEST_SYMBOLS = ["AAPL", "XOM", "NVDA", "NFLX"]
     TEST_YEARS   = [2022, 2023, 2024, 2025]
 
+    mode   = "test" if args.test else "full"
+    bucket = os.getenv("AWS_S3_BUCKET", "webull-trade-ai")
+    rlog   = RetrainLog(mode=mode)
+
     if args.test:
         log.info(f"=== Retrain SMOKE TEST  {datetime.now().strftime('%Y-%m-%d %H:%M')} ===")
         log.info(f"Symbols: {TEST_SYMBOLS}  |  Years: {TEST_YEARS}")
@@ -430,116 +512,147 @@ if __name__ == "__main__":
         log.info(f"=== Weekly Retrain  {datetime.now().strftime('%Y-%m-%d %H:%M')} ===")
     log.info(f"Device: {DEVICE}")
 
-    # 1. Download latest data
-    log.info("\n--- Downloading data from S3 ---")
-    download_data_from_s3()
-
-    base_symbols = TEST_SYMBOLS if args.test else fetch_sp500_symbols()
-    symbols      = list(set(base_symbols) | set(ETF_SYMBOLS))
-    ALL_YEARS    = TEST_YEARS if args.test else ALL_YEARS
-    log.info(f"Symbols: {len(symbols)} ({len(ETF_SYMBOLS)} ETFs included)  |  Years: {ALL_YEARS[0]}–{ALL_YEARS[-1]}")
-
-    log.info("\n--- Refreshing sentiment data ---")
-    download_sentiment()          # pull existing parquets from S3 (skips already-present files)
-    update_sentiment(symbols)     # fetch + score last 30 days from Alpaca
-
-    # 2. Load datasets
-    clf_df = load_all_symbols(symbols, target_type="classification", horizon=1)
-    reg_df = load_all_symbols(symbols, target_type="regression",     horizon=1)
-    clf_df = clf_df[clf_df["date"].dt.year.isin(ALL_YEARS)].reset_index(drop=True)
-    reg_df = reg_df[reg_df["date"].dt.year.isin(ALL_YEARS)].reset_index(drop=True)
-    clf_df["year_month"] = clf_df["date"].dt.to_period("M")
-    reg_df["year_month"] = reg_df["date"].dt.to_period("M")
-    log.info(f"Rows — clf: {len(clf_df):,}  reg: {len(reg_df):,}")
-
-    start = clf_df["date"].min().strftime("%Y-%m-%d")
-    end   = clf_df["date"].max().strftime("%Y-%m-%d")
-    log.info(f"Fetching SPY regimes ({start} → {end})...")
-    spy_regimes = fetch_spy_regimes(start, end)
-
-    # 3. Evaluate LSTM on last EVAL_MONTHS
-    log.info(f"\n--- Evaluating LSTM on last {EVAL_MONTHS} months ---")
-    lstm_preds, lstm_metrics, _ = eval_lstm(clf_df.copy(), reg_df.copy())
-    sharpes = {"lstm": round(lstm_metrics.get("sharpe", 0.0), 4)}
-    log.info(f"LSTM Sharpe: {sharpes['lstm']:.4f}")
-    winner = "lstm"
-
-    # 5. Train final LSTM on all data
-    log.info(f"\n--- Training final LSTM model on all data ---")
-    artifacts = train_final_lstm(clf_df.copy(), reg_df.copy())
-
-    # 5.5. Train portfolio allocator on venture eval returns
-    log.info("\n--- Training portfolio allocator ---")
     try:
-        from allocator import fetch_bucket_returns, build_allocator_df, walk_forward_allocate
+        # 1. Download latest data + build symbol list
+        rlog.begin_step("download_data")
+        log.info("\n--- Downloading data from S3 ---")
+        download_data_from_s3()
+        base_symbols = TEST_SYMBOLS if args.test else fetch_sp500_symbols()
+        symbols      = list(set(base_symbols) | set(ETF_SYMBOLS))
+        ALL_YEARS    = TEST_YEARS if args.test else ALL_YEARS
+        log.info(f"Symbols: {len(symbols)} ({len(ETF_SYMBOLS)} ETFs included)  |  Years: {ALL_YEARS[0]}–{ALL_YEARS[-1]}")
+        rlog.end_step(symbols=len(symbols))
 
-        venture_preds = lstm_preds
-        venture_results = run_backtest(venture_preds, plot=False)
+        # 2. Refresh sentiment
+        rlog.begin_step("sentiment_refresh")
+        log.info("\n--- Refreshing sentiment data ---")
+        download_sentiment()
+        update_sentiment(symbols)
+        rlog.end_step()
 
-        if venture_results:
-            bucket_returns = fetch_bucket_returns(start, end)
-            alloc_df = build_allocator_df(
-                venture_results["results_df"], bucket_returns, spy_regimes
-            )
-            _, final_params = walk_forward_allocate(alloc_df, min_train_months=6)
-            artifacts["allocator_params"] = final_params
-            log.info("Allocator trained — params added to artifacts.")
-        else:
-            log.warning("No venture returns — skipping allocator training.")
-    except Exception as e:
-        log.warning(f"Allocator training failed: {e} — proceeding without allocator params.")
+        # 3. Load datasets
+        rlog.begin_step("load_data")
+        clf_df = load_all_symbols(symbols, target_type="classification", horizon=1)
+        reg_df = load_all_symbols(symbols, target_type="regression",     horizon=1)
+        clf_df = clf_df[clf_df["date"].dt.year.isin(ALL_YEARS)].reset_index(drop=True)
+        reg_df = reg_df[reg_df["date"].dt.year.isin(ALL_YEARS)].reset_index(drop=True)
+        clf_df["year_month"] = clf_df["date"].dt.to_period("M")
+        reg_df["year_month"] = reg_df["date"].dt.to_period("M")
+        log.info(f"Rows — clf: {len(clf_df):,}  reg: {len(reg_df):,}")
+        start = clf_df["date"].min().strftime("%Y-%m-%d")
+        end   = clf_df["date"].max().strftime("%Y-%m-%d")
+        rlog.end_step(clf_rows=len(clf_df), reg_rows=len(reg_df),
+                      date_range=f"{start} → {end}")
 
-    # 6. Save artifacts + metadata
-    log.info(f"\n--- Saving artifacts ---")
-    save_artifacts(winner, artifacts)
-    meta = save_metadata(
-        winner        = winner,
-        sharpe_scores = sharpes,
-        trained_up_to = clf_df["date"].max().date(),
-        evaluation_months = EVAL_MONTHS,
-    )
+        # 4. SPY regimes
+        rlog.begin_step("spy_regimes")
+        log.info(f"Fetching SPY regimes ({start} → {end})...")
+        spy_regimes = fetch_spy_regimes(start, end)
+        rlog.end_step()
 
-    # 7. Upload to S3
-    log.info("\n--- Uploading to S3 ---")
-    upload_artifacts_to_s3(winner)
-    upload_metadata_to_s3()
+        # 5. Evaluate LSTM
+        rlog.begin_step("evaluate_lstm")
+        log.info(f"\n--- Evaluating LSTM on last {EVAL_MONTHS} months ---")
+        lstm_preds, lstm_metrics, _ = eval_lstm(clf_df.copy(), reg_df.copy())
+        sharpes = {"lstm": round(lstm_metrics.get("sharpe", 0.0), 4)}
+        winner  = "lstm"
+        log.info(f"LSTM Sharpe: {sharpes['lstm']:.4f}")
+        rlog.end_step(winner=winner, sharpe=sharpes["lstm"])
 
-    # Upload updated indicator parquets so daily runs start from fresh data.
-    # Without this, each daily run fetches all missing days from yfinance (slow).
-    try:
-        import boto3
-        _s3 = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"))
-        _bucket = os.getenv("AWS_S3_BUCKET", "webull-trade-ai")
-        parquet_files = [f for f in os.listdir(INDICATORS_DIR) if f.endswith(".parquet")]
-        log.info(f"Uploading {len(parquet_files)} indicator parquets to S3...")
-        for i, fname in enumerate(parquet_files, 1):
-            _s3.upload_file(
-                os.path.join(INDICATORS_DIR, fname),
-                _bucket,
-                f"data/indicators/{fname}",
-            )
-            if i % 100 == 0 or i == len(parquet_files):
-                log.info(f"  {i}/{len(parquet_files)} uploaded")
-    except Exception as e:
-        log.warning(f"Indicator parquet upload failed: {e}")
+        # 6. Train final LSTM
+        rlog.begin_step("train_final_lstm")
+        log.info("\n--- Training final LSTM model on all data ---")
+        artifacts = train_final_lstm(clf_df.copy(), reg_df.copy())
+        rlog.end_step()
 
-    # 8. Compute and upload live performance stats
-    log.info("\n--- Computing live performance stats ---")
-    try:
-        live_stats = compute_live_stats()
-        if live_stats:
+        # 7. Train portfolio allocator
+        rlog.begin_step("train_allocator")
+        log.info("\n--- Training portfolio allocator ---")
+        try:
+            from allocator import fetch_bucket_returns, build_allocator_df, walk_forward_allocate
+            venture_results = run_backtest(lstm_preds, plot=False)
+            if venture_results:
+                bucket_returns = fetch_bucket_returns(start, end)
+                alloc_df = build_allocator_df(
+                    venture_results["results_df"], bucket_returns, spy_regimes
+                )
+                _, final_params = walk_forward_allocate(alloc_df, min_train_months=6)
+                artifacts["allocator_params"] = final_params
+                log.info("Allocator trained — params added to artifacts.")
+                rlog.end_step(status_note="ok")
+            else:
+                log.warning("No venture returns — skipping allocator training.")
+                rlog.skip_step("no venture returns from backtest")
+        except Exception as e:
+            log.warning(f"Allocator training failed: {e} — proceeding without allocator params.")
+            rlog.skip_step(f"error: {e}")
+
+        # 8. Save + upload artifacts
+        rlog.begin_step("upload_artifacts")
+        log.info("\n--- Saving artifacts ---")
+        save_artifacts(winner, artifacts)
+        save_metadata(
+            winner            = winner,
+            sharpe_scores     = sharpes,
+            trained_up_to     = clf_df["date"].max().date(),
+            evaluation_months = EVAL_MONTHS,
+        )
+        log.info("\n--- Uploading to S3 ---")
+        upload_artifacts_to_s3(winner)
+        upload_metadata_to_s3()
+        rlog.end_step(winner=winner)
+
+        # 9. Upload indicator parquets
+        rlog.begin_step("upload_parquets")
+        try:
             import boto3
-            bucket = os.getenv("AWS_S3_BUCKET", "webull-trade-ai")
-            s3_client = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"))
-            s3_client.put_object(
-                Bucket=bucket,
-                Key="performance_stats.json",
-                Body=json.dumps(live_stats, indent=2).encode(),
-                ContentType="application/json",
-                CacheControl="no-cache",
-            )
-            log.info(f"Performance stats uploaded to s3://{bucket}/performance_stats.json")
-    except Exception as e:
-        log.warning(f"Live stats upload failed: {e}")
+            _s3 = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"))
+            parquet_files = [f for f in os.listdir(INDICATORS_DIR) if f.endswith(".parquet")]
+            log.info(f"Uploading {len(parquet_files)} indicator parquets to S3...")
+            for i, fname in enumerate(parquet_files, 1):
+                _s3.upload_file(
+                    os.path.join(INDICATORS_DIR, fname),
+                    bucket,
+                    f"data/indicators/{fname}",
+                )
+                if i % 100 == 0 or i == len(parquet_files):
+                    log.info(f"  {i}/{len(parquet_files)} uploaded")
+            rlog.end_step(parquets_uploaded=len(parquet_files))
+        except Exception as e:
+            log.warning(f"Indicator parquet upload failed: {e}")
+            rlog.skip_step(f"error: {e}")
 
-    log.info("\n=== Retrain complete ===")
+        # 10. Live performance stats
+        rlog.begin_step("live_stats")
+        log.info("\n--- Computing live performance stats ---")
+        try:
+            live_stats = compute_live_stats()
+            if live_stats:
+                import boto3
+                s3_client = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"))
+                s3_client.put_object(
+                    Bucket=bucket,
+                    Key="state/performance_stats.json",
+                    Body=json.dumps(live_stats, indent=2).encode(),
+                    ContentType="application/json",
+                    CacheControl="no-cache",
+                )
+                log.info(f"Performance stats uploaded to s3://{bucket}/state/performance_stats.json")
+                rlog.end_step(days_live=live_stats.get("days_live"),
+                              cumulative_return=live_stats.get("cumulative_return"))
+            else:
+                rlog.skip_step("insufficient balance history")
+        except Exception as e:
+            log.warning(f"Live stats upload failed: {e}")
+            rlog.skip_step(f"error: {e}")
+
+        rlog.finish()
+        log.info("\n=== Retrain complete ===")
+
+    except Exception as e:
+        rlog.fail(e)
+        log.error(f"Retrain failed at step '{rlog.data['error']['step']}': {e}")
+        raise
+
+    finally:
+        rlog.save(bucket)

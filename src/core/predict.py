@@ -80,7 +80,7 @@ def _compute_features_for_new_rows(sym, hist_df, new_rows_df):
     combined["symbol"] = sym
 
     ind = Indicators(combined)
-    ind.add_sma(20).add_sma(50).add_rsi().add_macd().add_adx(14)
+    ind.add_sma(20).add_sma(50).add_rsi().add_macd()
     feat_df = ind.df.copy()
 
     feat_df["return_lag1"]     = feat_df["close"].pct_change(1)
@@ -107,7 +107,12 @@ def _update_local_parquets(new_rows):
     Append newly computed rows to their existing local parquets.
     Called after fetching missing days so the next daily run only
     needs to fetch 1 day instead of re-downloading everything.
+    Only writes columns that already exist in the stored parquet
+    to prevent schema drift from leaking into training data.
     """
+    from data_pipeline import fetch_vix
+    vix_cache = {}
+
     for sym, grp in new_rows.groupby("symbol"):
         fpath = os.path.join(INDICATORS_DIR, f"{sym}.parquet")
         if not os.path.exists(fpath):
@@ -115,6 +120,27 @@ def _update_local_parquets(new_rows):
         try:
             existing = pd.read_parquet(fpath)
             existing["date"] = pd.to_datetime(existing["date"]).dt.normalize()
+
+            # Restrict new rows to only columns in existing schema
+            grp = grp[[c for c in existing.columns if c in grp.columns]].copy()
+
+            # Fill VIX for new rows using cached fetch
+            if "vix" in existing.columns and "vix" not in grp.columns:
+                grp["vix"] = float("nan")
+            if "vix" in grp.columns and grp["vix"].isna().any():
+                dates = grp["date"].dropna()
+                if not dates.empty:
+                    key = (dates.min().strftime("%Y-%m-%d"), dates.max().strftime("%Y-%m-%d"))
+                    if key not in vix_cache:
+                        vix_cache[key] = fetch_vix(key[0], key[1])
+                    vdf = vix_cache[key]
+                    if vdf is not None:
+                        vdf = vdf.copy()
+                        vdf["date"] = pd.to_datetime(vdf["date"])
+                        grp = grp.merge(vdf.rename(columns={"vix": "_vf"}), on="date", how="left")
+                        grp["vix"] = grp["vix"].fillna(grp["_vf"])
+                        grp = grp.drop(columns=["_vf"])
+
             updated = (
                 pd.concat([existing, grp], ignore_index=True)
                   .drop_duplicates("date")
