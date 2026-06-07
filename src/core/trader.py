@@ -66,6 +66,42 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
+def _etf_bucket_weights(etf_list, predictions_today, bucket_pct):
+    """
+    Distribute bucket_pct among ETFs that pass the model gate.
+
+    Only ETFs with clf_prob >= CLF_PROB_THRESHOLD and reg_pred > 0 are
+    included. Weights within the bucket are proportional to Kelly fraction.
+    Falls back to equal-weight among all listed ETFs if none pass the gate,
+    so the bucket allocation is never silently dropped to cash.
+    """
+    pool = predictions_today[predictions_today["symbol"].isin(etf_list)].copy()
+    qualified = pool[
+        (pool["clf_prob"] >= CLF_PROB_THRESHOLD) & (pool["reg_pred"] > 0)
+    ].copy()
+
+    if qualified.empty:
+        # Fallback: equal-weight all ETFs in the list (preserves old behaviour)
+        per_etf = bucket_pct / len(etf_list)
+        return {sym: per_etf for sym in etf_list}
+
+    qualified["kelly"] = qualified.apply(
+        lambda r: kelly_fraction(r["clf_prob"], r["reg_pred"], half_kelly=HALF_KELLY),
+        axis=1,
+    )
+    qualified = qualified[qualified["kelly"] > 0]
+
+    if qualified.empty:
+        per_etf = bucket_pct / len(etf_list)
+        return {sym: per_etf for sym in etf_list}
+
+    total_kelly = qualified["kelly"].sum()
+    return {
+        row["symbol"]: (row["kelly"] / total_kelly) * bucket_pct
+        for _, row in qualified.iterrows()
+    }
+
+
 class Trader:
     """
     Connects to Webull and executes model-driven rebalancing trades.
@@ -336,14 +372,10 @@ class Trader:
                 target[row["symbol"]] = weight
 
         if safety_pct > 0:
-            per_etf = safety_pct / len(SAFETY_ETFS)
-            for sym in SAFETY_ETFS:
-                target[sym] = per_etf
+            target.update(_etf_bucket_weights(SAFETY_ETFS, predictions_today, safety_pct))
 
         if hedge_pct > 0:
-            per_etf = hedge_pct / len(HEDGE_ETFS)
-            for sym in HEDGE_ETFS:
-                target[sym] = per_etf
+            target.update(_etf_bucket_weights(HEDGE_ETFS, predictions_today, hedge_pct))
 
         return target
 
