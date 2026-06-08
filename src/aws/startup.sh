@@ -18,6 +18,7 @@ echo "config-pull: pulling service files from s3://$BUCKET/config/"
 
 aws s3 cp "s3://$BUCKET/config/bot.service"     /etc/systemd/system/bot.service
 aws s3 cp "s3://$BUCKET/config/retrain.service" /etc/systemd/system/retrain.service
+aws s3 cp "s3://$BUCKET/config/bot.timer"       /etc/systemd/system/bot.timer       || true
 
 systemctl daemon-reload
 

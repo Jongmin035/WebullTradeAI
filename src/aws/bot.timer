@@ -1,10 +1,10 @@
 [Unit]
-Description=Run WebullTradeAI bot daily at market open
+Description=Run WebullTradeAI bot daily at midday
 Requires=bot.service
 
 [Timer]
-# 9:45 AM ET = 6:45 AM PT = 14:45 UTC — 15 minutes after market open
-OnCalendar=Mon..Fri 14:45:00 UTC
+# 3:30 PM ET = 12:30 PM PT = 19:30 UTC
+OnCalendar=Mon..Fri 19:30:00 UTC
 AccuracySec=60
 Persistent=true   # re-run immediately on next boot if the last trigger was missed
 
