@@ -52,6 +52,7 @@ MIN_TRADE_VALUE        = 1.0   # ignore positions worth less than $1 (rounding)
 MAX_CAPITAL            = None  # None = full account control
 CLF_PROB_THRESHOLD     = 0.60  # minimum model confidence to include a position
 MIN_POSITION_WEIGHT    = 0.03  # drop positions that would be < 3% of portfolio
+MAX_VENTURE_POSITIONS  = 10    # keep only top-N venture stocks by Kelly score
 
 SAFETY_ETFS = ["SPY", "XLP", "XLU"]
 HEDGE_ETFS  = ["GLDM", "SH", "SQQQ"]
@@ -362,6 +363,7 @@ class Trader:
         target = {}
 
         if not candidates.empty:
+            candidates = candidates.sort_values("kelly", ascending=False).head(MAX_VENTURE_POSITIONS)
             total_kelly = candidates["kelly"].sum()
             for _, row in candidates.iterrows():
                 # Proportional Kelly: each position gets its natural share of venture_pct.
@@ -536,11 +538,27 @@ class Trader:
                 if trade:
                     executed_trades.append(trade)
 
-            for symbol, dollar_amount in buys:
-                price = self.get_current_price(symbol)
-                trade = self._place_order(symbol, "BUY", dollar_amount, price)
-                if trade:
-                    executed_trades.append(trade)
+            # Re-fetch cash after sells — in a cash account, same-day sell proceeds
+            # are not settled (T+1), so only pre-existing cash is available for buys.
+            # Execute buys in descending order of size (highest Kelly first) and stop
+            # when settled cash is exhausted.
+            if buys:
+                settled_cash = self.get_account_snapshot()["cash_balance"]
+                log.info(f"Settled cash for buys: ${settled_cash:,.2f}")
+                remaining = settled_cash
+                for symbol, dollar_amount in sorted(buys, key=lambda x: x[1], reverse=True):
+                    required = dollar_amount * 1.02  # Webull requires 2% buffer
+                    if remaining < required:
+                        log.warning(
+                            f"Skipping BUY {symbol} (~${dollar_amount:.0f}) — "
+                            f"need ${required:.0f}, only ${remaining:.0f} settled cash left"
+                        )
+                        continue
+                    price = self.get_current_price(symbol)
+                    trade = self._place_order(symbol, "BUY", dollar_amount, price)
+                    if trade:
+                        executed_trades.append(trade)
+                        remaining -= dollar_amount
 
         # --- Post-trade reconciliation: confirm expected positions exist ---
         # Skip in dry-run (no real orders placed) and when there were no trades.
