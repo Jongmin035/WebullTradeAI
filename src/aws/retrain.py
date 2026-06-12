@@ -54,6 +54,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
+VERSION = "__VERSION__"
+
 # ============================================================
 # Retrain run log  (saved to S3 after every run)
 # ============================================================
@@ -503,6 +505,7 @@ if __name__ == "__main__":
 
     mode   = "test" if args.test else "full"
     bucket = os.getenv("AWS_S3_BUCKET", "webull-trade-ai")
+    log.info(f"retrain v{VERSION}  mode={mode}")
     rlog   = RetrainLog(mode=mode)
 
     if args.test:

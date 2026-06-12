@@ -39,6 +39,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
+VERSION = "__VERSION__"
+
 MAX_RETRIES      = 2
 RETRY_DELAY      = 5 * 60                    # seconds between retry attempts (5 minutes)
 TRADING_DEADLINE = dtime(15, 30)             # exit if past 3:30 PM ET before rebalancing
@@ -61,8 +63,10 @@ def main(dry_run=False):
     from dashboard_logger import restore_state_from_s3, log_warning
     from data_pipeline import fetch_sp500_symbols, ETF_SYMBOLS
     from model_store import load_artifacts, load_metadata
-    from predict import get_predictions_today, get_today_regime_vix, get_allocation_today
-    from trader import Trader
+    from predict import get_predictions_today, get_today_regime_vix, get_allocation_today, VERSION as PREDICT_VERSION
+    from trader import Trader, VERSION as TRADER_VERSION
+
+    log.info(f"bot v{VERSION}  trader v{TRADER_VERSION}  predict v{PREDICT_VERSION}")
 
     # 0. Exit immediately if today is a holiday or weekend
     if not _is_market_open():

@@ -66,6 +66,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
+VERSION = "__VERSION__"
+
 
 def _etf_bucket_weights(etf_list, predictions_today, bucket_pct):
     """

@@ -27,6 +27,8 @@ from regime_pipeline import fetch_spy_regimes, FEATURES
 
 log = logging.getLogger(__name__)
 
+VERSION = "__VERSION__"
+
 SEQ_LEN          = 20   # days of history needed per LSTM sequence
 FEATURE_BUFFER   = 250  # extra history days to load so indicators warm up correctly
 RANK_FEATURES    = ["rsi_rank", "volume_rank", "momentum_rank", "zscore20_rank", "volatility10_rank"]
