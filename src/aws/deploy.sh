@@ -18,13 +18,14 @@ SOURCE_FILES=(
     src/core/predict.py
     src/aws/retrain.py
     src/aws/startup.sh
+    src/aws/bot.service
 )
 
 deploy_file() {
     local f="$1"
-    # startup.sh lives at config/startup.sh; everything else goes under config/src/
-    if [[ "$f" == "src/aws/startup.sh" ]]; then
-        local s3_key="config/startup.sh"
+    # Some files go to config/ directly; everything else goes under config/src/
+    if [[ "$f" == "src/aws/startup.sh" || "$f" == "src/aws/bot.service" ]]; then
+        local s3_key="config/$(basename "$f")"
     else
         local s3_key="config/src/${f#src/}"
     fi
