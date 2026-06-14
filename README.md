@@ -89,7 +89,7 @@ A 13-parameter walk-forward optimizer (Nelder-Mead) maps `(regime, VIX)` to four
 
 | Bucket | Contents | Typical allocation |
 |---|---|---|
-| **Venture** | Top 15 S&P 500 stocks by Kelly criterion | 30–50% |
+| **Venture** | Top 10 S&P 500 stocks by Kelly criterion | 30–50% |
 | **Safety** | SPY, XLP, XLU (equal-weighted) | 20–40% |
 | **Hedge** | GLDM, SH, SQQQ (equal-weighted) | 0–15% |
 | **Cash** | Uninvested | 0–60% |
@@ -105,7 +105,7 @@ kelly = clf_prob - (1 - clf_prob)   # edge / odds (simplified)
 weight_i = kelly_i / sum(kelly)  ×  venture_pct
 ```
 
-Positions are capped to the top 15 stocks by Kelly to ensure each position is large enough to clear the 2% rebalance threshold.
+Positions are capped to the top 10 stocks by Kelly to ensure each position is large enough to clear the 2% rebalance threshold.
 
 ### Rebalancing
 
@@ -153,53 +153,73 @@ All credentials are loaded from environment variables (`.env`) and never hardcod
 
 | Component | Purpose |
 |---|---|
-| EC2 g5.xlarge | GPU instance for training (NVIDIA A10G, 16 GB VRAM) |
-| S3 `webull-trade-ai` | Model artifacts, training data parquets, bot state |
-| EventBridge | Starts EC2 on schedule (weekdays 14:30 UTC, Saturdays 11:55 UTC) |
-| systemd `bot.service` | Runs `main.py` on weekdays, shuts down EC2 when done |
-| systemd `retrain.service` | Runs `retrain.py` on Saturdays, shuts down EC2 when done |
+| EC2 g5.xlarge | GPU instance (NVIDIA A10G, 16 GB VRAM) — runs both the daily bot and weekly retrain |
+| ECR `webull-bot` / `webull-retrain` | Docker image registry — GitHub Actions pushes here on every commit |
+| S3 `webull-trade-ai` | Model artifacts, training data parquets, bot state, systemd service files |
+| EventBridge | Starts EC2 on schedule (weekdays 19:15 UTC, Saturdays 11:55 UTC) |
+| systemd `bot.service` | Runs the bot container on weekdays, shuts down EC2 when done |
+| systemd `retrain.service` | Runs the retrain container on Saturdays |
 
-**Cost**: ~$25/month (g5.xlarge billed only during runs — ~10 min/day + ~2 hr/week retrain).
+**Cost**: ~$13/month (g5.xlarge billed only during runs — ~20 min/day + ~2 hr/week retrain; ECR storage ~$0.25/month).
+
+### Deployment pipeline
+
+```
+git push → GitHub Actions
+             ├── docker build Dockerfile.bot   → ECR webull-bot:latest
+             └── docker build Dockerfile.retrain → ECR webull-retrain:latest
+
+EC2 boot (triggered by EventBridge)
+  └── config-pull.service runs startup.sh
+        ├── downloads latest service/timer files from S3
+        └── docker pull webull-bot:latest + webull-retrain:latest
+
+bot.timer fires
+  └── docker run webull-bot:latest  (GIT_SHA env var shows exact commit)
+```
+
+No SSH, no manual steps. A code change is live on the next scheduled run.
 
 ---
 
 ## Project Structure
 
 ```
-src/
-├── aws/           # EC2 entry points
-│   ├── main.py        # daily trading run
-│   ├── retrain.py     # weekly retrain pipeline
-│   ├── cleanup.py     # delete stale model artifacts
-│   ├── healthcheck.py # exits 0/1 based on last run status
-│   ├── bot.service / bot.timer
-│   └── retrain.service / retrain.timer
-├── core/          # shared library
-│   ├── trader.py      # Webull order execution + Kelly sizing
-│   ├── predict.py     # daily inference engine
-│   ├── safeguards.py  # VIX / drawdown / stop-loss checks
-│   ├── model_store.py # save/load artifacts (local + S3)
-│   ├── dashboard_logger.py  # S3 state persistence + dashboard upload
-│   └── controls.py    # runtime config (emergency stop, force sell, etc.)
-├── pipeline/      # data + features
-│   ├── data_pipeline.py  # load parquets + merge yfinance + sentiment
-│   ├── indicators.py     # technical indicator computation
-│   ├── sentiment.py      # Alpaca News + FinBERT sentiment pipeline
-│   ├── backtest.py       # walk-forward evaluation
-│   └── metrics.py        # Kelly criterion, Sharpe, Sortino
-├── models/        # model definitions
-│   ├── regime_pipeline.py  # SPY regime detection
-│   └── allocator.py        # bucket allocator (venture/safety/hedge/cash)
-├── dashboard/     # reporting
-│   ├── index.html    # live dashboard (S3 static site)
-│   ├── history.html  # trade history page (auto-generated)
-│   └── history.py    # HTML generation from trade_log.csv
-└── state/         # local bot state (backed up to S3)
-    ├── trade_log.csv
-    ├── balance_history.csv
-    ├── position_highs.json
-    ├── peak_portfolio_value.json
-    └── commands.json       # runtime controls (max_capital, emergency_stop, etc.)
+├── docker/
+│   ├── Dockerfile.bot      # python:3.11-slim + CPU torch (~2 GB image)
+│   └── Dockerfile.retrain  # python:3.11-slim + CUDA torch (~6.5 GB image)
+├── .github/workflows/
+│   └── deploy.yml          # builds + pushes both images to ECR on push to main
+├── requirements.txt        # all Python dependencies except torch
+└── src/
+    ├── aws/               # EC2 entry points + infrastructure
+    │   ├── main.py            # daily trading run
+    │   ├── retrain.py         # weekly retrain pipeline
+    │   ├── bot.service / bot.timer
+    │   ├── retrain.service / retrain.timer
+    │   ├── startup.sh         # runs on every boot: pulls service files + Docker images
+    │   ├── bootstrap.sh       # first-boot setup: installs Docker + nvidia-container-toolkit
+    │   └── deploy.sh          # uploads service/timer/startup files to S3
+    ├── core/              # shared library
+    │   ├── trader.py          # Webull order execution + Kelly sizing
+    │   ├── predict.py         # daily inference engine
+    │   ├── safeguards.py      # VIX / drawdown / stop-loss checks
+    │   ├── model_store.py     # save/load artifacts (local + S3)
+    │   ├── dashboard_logger.py  # S3 state persistence + dashboard upload
+    │   └── controls.py        # runtime config (emergency stop, force sell, etc.)
+    ├── pipeline/          # data + features
+    │   ├── data_pipeline.py   # load parquets + merge yfinance + sentiment
+    │   ├── indicators.py      # technical indicator computation
+    │   ├── sentiment.py       # Alpaca News + FinBERT sentiment pipeline
+    │   ├── backtest.py        # walk-forward evaluation
+    │   └── metrics.py         # Kelly criterion, Sharpe, Sortino
+    ├── models/            # model definitions
+    │   ├── regime_pipeline.py  # SPY regime detection
+    │   └── allocator.py        # bucket allocator (venture/safety/hedge/cash)
+    └── dashboard/         # reporting
+        ├── index.html         # live dashboard (S3 static site)
+        ├── history.html       # trade history page (auto-generated)
+        └── history.py         # HTML generation from trade_log.csv
 ```
 
 ---
@@ -228,10 +248,23 @@ Runtime behavior is controlled via `src/state/commands.json` (synced to S3 — c
 
 ## Setup
 
-1. Clone the repo and install dependencies into a virtualenv
-2. Copy `.env.example` to `.env` and fill in your Webull, AWS, and Alpaca credentials
-3. Upload historical S&P 500 parquets to S3 (see `src/pipeline/data_pipeline.py`)
-4. Run `src/aws/setup.sh` on your EC2 instance to install the bot
-5. Set up EventBridge rules to start EC2 on the weekday and Saturday schedules
+### Prerequisites
 
-See `src/aws/setup.sh` for the full EC2 setup script.
+- AWS account with an EC2 g5.xlarge, an S3 bucket, and two ECR repositories (`webull-bot`, `webull-retrain`)
+- Webull Open API credentials and an Alpaca API key
+- GitHub repository with `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` set as Actions secrets
+
+### Deploy
+
+```bash
+# 1. Fill in credentials
+cp .env.example .env   # add Webull, AWS, and Alpaca keys
+
+# 2. Push to main — GitHub Actions builds and pushes both Docker images to ECR automatically
+git push origin main
+
+# 3. Deploy infrastructure files to S3 (service/timer/startup files)
+bash src/aws/deploy.sh
+```
+
+On the next EC2 boot, `startup.sh` pulls the latest images from ECR and the bot runs as a Docker container. No SSH or manual steps required for subsequent deploys — `git push` is sufficient.
