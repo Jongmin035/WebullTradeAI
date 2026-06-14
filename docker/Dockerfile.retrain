@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # CUDA-enabled PyTorch — bundles the CUDA runtime so the host only needs
 # NVIDIA drivers + nvidia-container-toolkit (no full CUDA toolkit required)
-RUN pip install --no-cache-dir torch==2.11.0 \
+RUN pip install --no-cache-dir torch==2.6.0 \
     --index-url https://download.pytorch.org/whl/cu124
 
 COPY requirements.txt .
