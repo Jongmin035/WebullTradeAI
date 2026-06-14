@@ -1,12 +1,12 @@
 [Unit]
 Description=Run WebullTradeAI bot daily at midday
 Requires=bot.service
+After=config-pull.service
 
 [Timer]
 # 3:30 PM ET = 12:30 PM PT = 19:30 UTC
 OnCalendar=Mon..Fri 19:30:00 UTC
 AccuracySec=60
-Persistent=true   # re-run immediately on next boot if the last trigger was missed
 
 [Install]
 WantedBy=timers.target

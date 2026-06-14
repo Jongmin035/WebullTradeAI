@@ -16,8 +16,7 @@ SyslogIdentifier=webull-retrain
 # Retrain can take several hours — no timeout
 TimeoutStartSec=infinity
 
-# Shutdown after retrain completes to avoid paying for idle EC2 time
-ExecStopPost=sudo /sbin/shutdown -h now
+# Shutdown is handled by retrain.py itself on success to avoid idle EC2 costs.
 
 [Install]
 WantedBy=multi-user.target

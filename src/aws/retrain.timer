@@ -7,7 +7,6 @@ Requires=retrain.service
 # Retrain takes ~3-4 hrs on g5.xlarge — done well before Sunday
 OnCalendar=Sat 12:00:00 UTC
 AccuracySec=60
-Persistent=true
 
 [Install]
 WantedBy=timers.target
