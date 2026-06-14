@@ -1,0 +1,22 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc g++ && \
+    rm -rf /var/lib/apt/lists/*
+
+# CUDA-enabled PyTorch — bundles the CUDA runtime so the host only needs
+# NVIDIA drivers + nvidia-container-toolkit (no full CUDA toolkit required)
+RUN pip install --no-cache-dir torch==2.11.0 \
+    --index-url https://download.pytorch.org/whl/cu124
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY src/ src/
+
+ARG GIT_SHA=dev
+ENV GIT_SHA=${GIT_SHA}
+
+CMD ["python", "src/aws/retrain.py"]

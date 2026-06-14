@@ -1,0 +1,51 @@
+name: Build and Push to ECR
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Login to ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push bot image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build \
+            --build-arg GIT_SHA=$IMAGE_TAG \
+            -f docker/Dockerfile.bot \
+            -t $ECR_REGISTRY/webull-bot:$IMAGE_TAG \
+            -t $ECR_REGISTRY/webull-bot:latest \
+            .
+          docker push $ECR_REGISTRY/webull-bot:$IMAGE_TAG
+          docker push $ECR_REGISTRY/webull-bot:latest
+
+      - name: Build and push retrain image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build \
+            --build-arg GIT_SHA=$IMAGE_TAG \
+            -f docker/Dockerfile.retrain \
+            -t $ECR_REGISTRY/webull-retrain:$IMAGE_TAG \
+            -t $ECR_REGISTRY/webull-retrain:latest \
+            .
+          docker push $ECR_REGISTRY/webull-retrain:$IMAGE_TAG
+          docker push $ECR_REGISTRY/webull-retrain:latest

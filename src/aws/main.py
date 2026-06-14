@@ -39,7 +39,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION = "__VERSION__"
+VERSION = os.environ.get("GIT_SHA", "dev")
 
 MAX_RETRIES      = 2
 RETRY_DELAY      = 5 * 60                    # seconds between retry attempts (5 minutes)

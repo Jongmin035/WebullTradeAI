@@ -1,30 +1,23 @@
 [Unit]
 Description=WebullTradeAI trading bot
-After=network-online.target
+After=network-online.target docker.service
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-User=ec2-user
-WorkingDirectory=/home/ec2-user/WebullTradeAI
+User=root
 
-# Load environment variables from .env
-EnvironmentFile=/home/ec2-user/WebullTradeAI/.env
+# .env is mounted read-only so python-dotenv can parse it (handles quoted values
+# correctly, unlike Docker's --env-file which passes them literally)
+ExecStart=/usr/bin/docker run --rm \
+    -v /home/ec2-user/WebullTradeAI/.env:/app/.env:ro \
+    webull-bot:latest
 
-# Restore any missing state files from S3 before trading
-ExecStartPre=/home/ec2-user/WebullTradeAI/.venv/bin/python -c \
-    "import sys; sys.path.insert(0, 'src/core'); from dashboard_logger import restore_state_from_s3; restore_state_from_s3()"
-
-# Main bot entry point — replace with your actual run script
-ExecStart=/home/ec2-user/WebullTradeAI/.venv/bin/python src/aws/main.py
-
-# Restart on failure (crash recovery)
 Restart=on-failure
 RestartSec=30
 StartLimitIntervalSec=300
 StartLimitBurst=3
 
-# Log to systemd journal — view with: journalctl -u bot.service -f
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=webull-bot

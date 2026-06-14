@@ -54,7 +54,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION = "__VERSION__"
+VERSION = os.environ.get("GIT_SHA", "dev")
 
 # ============================================================
 # Retrain run log  (saved to S3 after every run)

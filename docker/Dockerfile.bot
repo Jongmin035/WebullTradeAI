@@ -1,0 +1,23 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc g++ && \
+    rm -rf /var/lib/apt/lists/*
+
+# CPU-only PyTorch — keeps the image small (~1.2 GB vs ~5 GB for CUDA)
+RUN pip install --no-cache-dir torch==2.11.0 \
+    --index-url https://download.pytorch.org/whl/cpu
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY src/ src/
+
+# GIT_SHA is injected at build time by GitHub Actions and exposed at runtime
+# so VERSION = os.environ.get("GIT_SHA", "dev") shows the exact deployed commit
+ARG GIT_SHA=dev
+ENV GIT_SHA=${GIT_SHA}
+
+CMD ["python", "src/aws/main.py"]

@@ -1,6 +1,7 @@
 #!/bin/bash
 # Runs on every boot via config-pull.service (Before=bot.timer / retrain.timer).
-# Downloads the latest service files from S3 so changes take effect without SSH.
+# Downloads the latest service files from S3, then pulls the latest Docker images
+# from ECR so bot.service and retrain.service always run the newest code.
 set -euo pipefail
 
 ENV_FILE=/home/ec2-user/WebullTradeAI/.env
@@ -23,10 +24,19 @@ aws s3 cp "s3://$BUCKET/config/retrain.timer"   /etc/systemd/system/retrain.time
 
 systemctl daemon-reload
 
-# Pull latest Python source files if present in S3.
-# Upload a file to s3://$BUCKET/config/src/ to deploy it on next boot.
-CODE_DIR=/home/ec2-user/WebullTradeAI
-echo "config-pull: syncing source files from s3://$BUCKET/config/src/ (if any)"
-aws s3 sync "s3://$BUCKET/config/src/" "$CODE_DIR/src/" --quiet || true
+# Pull latest Docker images from ECR so the next run uses the newest code.
+# GitHub Actions pushes a new image on every git push to main.
+echo "config-pull: logging in to ECR and pulling latest images"
+ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+ECR="${ACCOUNT}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
+
+aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | \
+    docker login --username AWS --password-stdin "$ECR"
+
+docker pull "${ECR}/webull-bot:latest"
+docker tag  "${ECR}/webull-bot:latest" webull-bot:latest
+
+docker pull "${ECR}/webull-retrain:latest"
+docker tag  "${ECR}/webull-retrain:latest" webull-retrain:latest
 
 echo "config-pull: done"

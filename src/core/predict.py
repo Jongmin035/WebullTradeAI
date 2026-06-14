@@ -27,7 +27,7 @@ from regime_pipeline import fetch_spy_regimes, FEATURES
 
 log = logging.getLogger(__name__)
 
-VERSION = "__VERSION__"
+VERSION = os.environ.get("GIT_SHA", "dev")
 
 SEQ_LEN          = 20   # days of history needed per LSTM sequence
 FEATURE_BUFFER   = 250  # extra history days to load so indicators warm up correctly

@@ -1,14 +1,17 @@
 [Unit]
 Description=WebullTradeAI weekly model retrain
-After=network-online.target
+After=network-online.target docker.service
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-User=ec2-user
-WorkingDirectory=/home/ec2-user/WebullTradeAI
-EnvironmentFile=/home/ec2-user/WebullTradeAI/.env
-ExecStart=/home/ec2-user/WebullTradeAI/.venv/bin/python src/aws/retrain.py
+User=root
+
+ExecStart=/usr/bin/docker run --rm \
+    --gpus all \
+    -v /home/ec2-user/WebullTradeAI/.env:/app/.env:ro \
+    webull-retrain:latest
+
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=webull-retrain
