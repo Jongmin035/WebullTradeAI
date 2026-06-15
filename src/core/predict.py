@@ -255,17 +255,14 @@ def load_latest_features(symbols, window_days=None):
 
         if new_rows_list:
             new_all = pd.concat(new_rows_list, ignore_index=True)
-            new_all = _add_rank_features(new_all)
             _update_local_parquets(new_all)
             combined = pd.concat([combined, new_all], ignore_index=True)
 
     combined = combined.sort_values(["symbol", "date"]).reset_index(drop=True)
 
-    # Ensure rank features exist (parquets should have them already)
-    for rc in RANK_FEATURES:
-        if rc not in combined.columns:
-            combined = _add_rank_features(combined)
-            break
+    # Always recompute rank features on the full combined so old and new rows
+    # are consistent. Rank features are cross-sectional and not stored in parquets.
+    combined = _add_rank_features(combined)
 
     # Merge sentiment features from local parquets (fill 0.0 if missing)
     combined = _merge_sentiment(combined, symbols)
