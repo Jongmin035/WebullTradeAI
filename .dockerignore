@@ -6,7 +6,6 @@ __pycache__/
 *.pyc
 *.pyo
 src/state/
-src/models/
 src/dashboard/stats.json
 src/dashboard/index.html
 src/dashboard/history.html
