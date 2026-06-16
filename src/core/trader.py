@@ -518,6 +518,12 @@ class Trader:
             target_w  = target_weights.get(symbol, 0.0)
             delta     = target_w - current_w
 
+            if target_w == 0.0 and current_w > 0.0:
+                # Model doesn't want this position — always do a full sell regardless
+                # of how small it is. Ensures the bot fully controls the account.
+                sells.append((symbol, current_w * effective_pv))
+                continue
+
             if abs(delta) <= REBALANCE_THRESHOLD:
                 continue  # within threshold, no trade needed
 
