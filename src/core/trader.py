@@ -52,7 +52,8 @@ MIN_TRADE_VALUE        = 1.0   # ignore positions worth less than $1 (rounding)
 MAX_CAPITAL            = None  # None = full account control
 CLF_PROB_THRESHOLD     = 0.60  # minimum model confidence to include a position
 MIN_POSITION_WEIGHT    = 0.03  # drop positions that would be < 3% of portfolio
-MAX_VENTURE_POSITIONS  = 10    # keep only top-N venture stocks by Kelly score
+MAX_VENTURE_POSITIONS  = 10    # buy/target top-N venture stocks by Kelly score
+HOLD_ZONE_MAX_RANK     = 30    # keep held positions ranked up to this (reduces churn)
 
 SAFETY_ETFS = ["SPY", "XLP", "XLU"]
 HEDGE_ETFS  = ["GLDM", "SH", "SQQQ"]
@@ -333,15 +334,18 @@ class Trader:
     # Rebalancing
     # ------------------------------------------------------------------
 
-    def compute_target_weights(self, predictions_today, allocation=None):
+    def compute_target_weights(self, predictions_today, allocation=None, current_weights=None):
         """
         Compute target weights from today's model predictions and bucket allocation.
 
         Parameters
         ----------
         predictions_today : DataFrame with columns: symbol, clf_prob, reg_pred
-        allocation : dict with venture_pct, safety_pct, hedge_pct, cash_pct, or None.
-                     When None, behaves as pure venture (original behaviour).
+        allocation        : dict with venture_pct, safety_pct, hedge_pct, cash_pct, or None.
+                            When None, behaves as pure venture (original behaviour).
+        current_weights   : dict {symbol: weight} of positions currently held (from live API).
+                            Used to implement the hold zone: positions ranked 11–HOLD_ZONE_MAX_RANK
+                            that are already held are kept as-is rather than sold.
 
         Returns
         -------
@@ -350,6 +354,7 @@ class Trader:
         venture_pct = allocation["venture_pct"] if allocation else 1.0
         safety_pct  = allocation["safety_pct"]  if allocation else 0.0
         hedge_pct   = allocation["hedge_pct"]   if allocation else 0.0
+        held        = current_weights or {}
 
         candidates = predictions_today[
             (predictions_today["clf_prob"] >= CLF_PROB_THRESHOLD) &
@@ -360,20 +365,27 @@ class Trader:
             lambda r: kelly_fraction(r["clf_prob"], r["reg_pred"], half_kelly=HALF_KELLY),
             axis=1,
         )
-        candidates = candidates[candidates["kelly"] > 0]
+        candidates = candidates[candidates["kelly"] > 0].sort_values("kelly", ascending=False).reset_index(drop=True)
 
         target = {}
 
         if not candidates.empty:
-            candidates = candidates.sort_values("kelly", ascending=False).head(MAX_VENTURE_POSITIONS)
-            total_kelly = candidates["kelly"].sum()
-            for _, row in candidates.iterrows():
-                # Proportional Kelly: each position gets its natural share of venture_pct.
-                # Positions below the minimum floor are excluded; remaining capital stays cash.
+            # Buy zone: top MAX_VENTURE_POSITIONS — sized by proportional Kelly
+            buy_zone = candidates.head(MAX_VENTURE_POSITIONS)
+            total_kelly = buy_zone["kelly"].sum()
+            for _, row in buy_zone.iterrows():
                 weight = (row["kelly"] / total_kelly) * venture_pct
                 if weight < MIN_POSITION_WEIGHT:
                     continue
                 target[row["symbol"]] = weight
+
+            # Hold zone: ranks MAX_VENTURE_POSITIONS+1 to HOLD_ZONE_MAX_RANK
+            # Keep at current weight if already held — no trade triggered, reduces churn.
+            hold_zone = candidates.iloc[MAX_VENTURE_POSITIONS:HOLD_ZONE_MAX_RANK]
+            for _, row in hold_zone.iterrows():
+                sym = row["symbol"]
+                if sym in held:
+                    target[sym] = held[sym]
 
         if safety_pct > 0:
             target.update(_etf_bucket_weights(SAFETY_ETFS, predictions_today, safety_pct))
@@ -439,6 +451,7 @@ class Trader:
             )
 
         position_details = self.get_position_details(portfolio_value)
+        log.info(f"Positions from Webull API ({len(position_details)}): {sorted(position_details.keys())}")
         manual           = set(cmds.get("manual_symbols", []))
 
         # Split positions into bot-managed and manual
@@ -459,7 +472,7 @@ class Trader:
                 d["weight"] = round(d["market_value"] / effective_pv, 4)
 
         current_weights = {sym: d["weight"] for sym, d in bot_details.items()}
-        target_weights  = self.compute_target_weights(predictions_today, allocation)
+        target_weights  = self.compute_target_weights(predictions_today, allocation, current_weights)
 
         # Remove manual symbols from target (bot will not buy/sell them)
         if manual:
