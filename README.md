@@ -6,7 +6,7 @@ An autonomous ML trading bot that runs on AWS EC2, trades S&P 500 stocks through
 
 ## How It Works
 
-Every weekday at 9:35 AM ET the bot wakes up on EC2, runs inference on all 500 S&P 500 symbols, and rebalances the portfolio. Every Saturday it retrains the LSTM on the latest data and uploads new model artifacts to S3. The EC2 instance shuts itself down after each run to minimize cost.
+Every weekday at 3:30 PM ET the bot wakes up on EC2, runs inference on all 500 S&P 500 symbols, and rebalances the portfolio. Every Saturday it retrains the LSTM on the latest data and uploads new model artifacts to S3. The EC2 instance shuts itself down after each run to minimize cost.
 
 ```
 Saturday (weekly)                  Weekdays (daily)
@@ -89,12 +89,14 @@ A 13-parameter walk-forward optimizer (Nelder-Mead) maps `(regime, VIX)` to four
 
 | Bucket | Contents | Typical allocation |
 |---|---|---|
-| **Venture** | Top 10 S&P 500 stocks by Kelly criterion | 30–50% |
-| **Safety** | SPY, XLP, XLU (equal-weighted) | 20–40% |
-| **Hedge** | GLDM, SH, SQQQ (equal-weighted) | 0–15% |
+| **Venture** | Top S&P 500 stocks by Kelly criterion (see below) | 30–50% |
+| **Safety** | SPY, XLP, XLU (equal-weighted within bucket) | 20–40% |
+| **Hedge** | GLDM, SH, SQQQ (equal-weighted within bucket) | 0–15% |
 | **Cash** | Uninvested | 0–60% |
 
 The allocator is contrarian (Buffett-style): it holds more cash in bull markets and deploys aggressively during bear markets / recoveries. A VIX slope parameter shifts venture allocation toward hedge as VIX rises above 20.
+
+Safety and hedge ETFs are not subject to the same ranking system as venture stocks. The allocator's `safety_pct` is the model's judgment of how much defensive exposure to hold; the ETFs within each bucket are always held at equal weight and are only exited if the model explicitly predicts a decline (`reg_pred < 0`).
 
 ### Stage 3 — Position Sizing (Kelly Criterion)
 
@@ -105,11 +107,19 @@ kelly = clf_prob - (1 - clf_prob)   # edge / odds (simplified)
 weight_i = kelly_i / sum(kelly)  ×  venture_pct
 ```
 
-Positions are capped to the top 10 stocks by Kelly to ensure each position is large enough to clear the 2% rebalance threshold.
-
 ### Rebalancing
 
-A trade is only placed if the difference between a stock's target weight and its current portfolio weight exceeds **2%**. This prevents excessive turnover from small price drifts.
+Stocks are ranked by Kelly score each day and fall into one of three zones:
+
+| Zone | Criteria | Action |
+|---|---|---|
+| **Buy zone** | Top 10 by Kelly (clf_prob ≥ 0.60, reg_pred > 0) | Buy/hold at proportional Kelly weight |
+| **Hold zone** | Ranks 11–30, currently held | Keep at current weight — no trade triggered |
+| **Sell zone** | Rank > 30, or below confidence threshold | Full exit |
+
+The hold zone reduces unnecessary daily turnover: a stock that slips from rank 9 to rank 12 is held rather than sold and potentially repurchased the next day.
+
+A trade is only placed if the weight delta between target and current exceeds **2%** (except full exits, which always execute regardless of size).
 
 ---
 
