@@ -43,7 +43,7 @@ VERSION = os.environ.get("GIT_SHA", "dev")
 
 MAX_RETRIES      = 2
 RETRY_DELAY      = 5 * 60                    # seconds between retry attempts (5 minutes)
-TRADING_DEADLINE = dtime(15, 45)             # exit if past 3:45 PM ET before rebalancing
+TRADING_DEADLINE = dtime(15, 30)             # exit if past 3:30 PM ET before rebalancing
 _ET              = ZoneInfo("America/New_York")
 
 
