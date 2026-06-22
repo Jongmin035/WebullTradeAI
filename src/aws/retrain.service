@@ -10,6 +10,8 @@ User=root
 ExecStart=/usr/bin/docker run --rm \
     --gpus all \
     -v /home/ec2-user/WebullTradeAI/.env:/app/.env:ro \
+    -v /home/ec2-user/WebullTradeAI/src/data:/app/src/data \
+    -v /home/ec2-user/WebullTradeAI/src/models:/app/src/models \
     webull-retrain:latest
 
 StandardOutput=journal
@@ -19,7 +21,10 @@ SyslogIdentifier=webull-retrain
 # Retrain can take several hours — no timeout
 TimeoutStartSec=infinity
 
-# Shutdown is handled by retrain.py itself on success to avoid idle EC2 costs.
+# Shut down after retrain completes (success or failure) on weekends.
+# retrain.py ran shutdown internally pre-Docker, but that doesn't work inside
+# a container — ExecStopPost runs on the EC2 host after the container exits.
+ExecStopPost=/bin/bash -c 'day=$(date +%%u); if [ "$day" -lt 6 ]; then exit 0; fi; sudo /sbin/shutdown -h now'
 
 [Install]
 WantedBy=multi-user.target
