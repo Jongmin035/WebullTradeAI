@@ -6,7 +6,7 @@ An autonomous ML trading bot that runs on AWS EC2, trades S&P 500 stocks through
 
 ## How It Works
 
-Every weekday at 3:30 PM ET the bot wakes up on EC2, runs inference on all 500 S&P 500 symbols, and rebalances the portfolio. Every Saturday it retrains the LSTM on the latest data and uploads new model artifacts to S3. The EC2 instance shuts itself down after each run to minimize cost.
+Every weekday at 11:00 AM ET (8:00 AM PT) the bot wakes up on EC2, runs inference on all 500 S&P 500 symbols, and rebalances the portfolio. Every Saturday it retrains the LSTM on the latest data and uploads new model artifacts to S3. The EC2 instance shuts itself down after each run to minimize cost.
 
 ```
 Saturday (weekly)                  Weekdays (daily)
@@ -166,7 +166,7 @@ All credentials are loaded from environment variables (`.env`) and never hardcod
 | EC2 g5.xlarge | GPU instance (NVIDIA A10G, 16 GB VRAM) — runs both the daily bot and weekly retrain |
 | ECR `webull-bot` / `webull-retrain` | Docker image registry — GitHub Actions pushes here on every commit |
 | S3 `webull-trade-ai` | Model artifacts, training data parquets, bot state, systemd service files |
-| EventBridge | Starts EC2 on schedule (weekdays 19:15 UTC, Saturdays 11:55 UTC) |
+| EventBridge | Starts EC2 on schedule (weekdays 14:45 UTC, Saturdays 11:55 UTC) |
 | systemd `bot.service` | Runs the bot container on weekdays, shuts down EC2 when done |
 | systemd `retrain.service` | Runs the retrain container on Saturdays |
 
