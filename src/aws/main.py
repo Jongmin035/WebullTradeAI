@@ -59,8 +59,33 @@ def _is_market_open():
         return True  # fail open: better to attempt than miss a trading day
 
 
+def _save_predictions_to_s3(predictions):
+    """Upload today's top predictions to S3 for debugging visibility."""
+    try:
+        import json
+        import boto3
+        bucket = os.getenv("AWS_S3_BUCKET")
+        if not bucket:
+            return
+        top = (
+            predictions
+            .nlargest(30, "clf_prob")[["symbol", "clf_prob", "reg_pred"]]
+            .round(4)
+            .to_dict("records")
+        )
+        key = f"predictions/{datetime.now(_ET).strftime('%Y-%m-%d')}.json"
+        boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1")).put_object(
+            Bucket=bucket, Key=key,
+            Body=json.dumps(top, indent=2),
+            ContentType="application/json",
+        )
+        log.info(f"Saved top {len(top)} predictions to s3://{bucket}/{key}")
+    except Exception as e:
+        log.warning(f"Could not save predictions to S3: {e}")
+
+
 def main(dry_run=False):
-    from dashboard_logger import restore_state_from_s3, log_warning
+    from dashboard_logger import restore_state_from_s3, log_warning, log_error
     from data_pipeline import fetch_sp500_symbols, ETF_SYMBOLS
     from model_store import load_artifacts, load_metadata
     from predict import get_predictions_today, get_today_regime_vix, get_allocation_today, VERSION as PREDICT_VERSION
@@ -81,62 +106,73 @@ def main(dry_run=False):
     symbols = list(set(fetch_sp500_symbols()) | set(ETF_SYMBOLS))
     log.info(f"Universe: {len(symbols)} symbols ({len(ETF_SYMBOLS)} ETFs included)")
 
-    # 3. Generate today's predictions using the current winning model
-    log.info("Generating predictions...")
-    predictions = get_predictions_today(symbols)
-    log.info(f"Predictions ready: {len(predictions)} candidates")
-
-    if predictions.empty:
-        log.warning("No predictions generated — skipping rebalance.")
-        return
-
-    # 3.5. Compute today's bucket allocation
-    allocation = None
     try:
-        meta = load_metadata()
-        if meta:
-            artifacts = load_artifacts(meta["winner"])
-            regime, vix = get_today_regime_vix()
-            allocation  = get_allocation_today(artifacts, regime, vix)
-            log.info(
-                f"Allocation — venture: {allocation['venture_pct']:.0%}  "
-                f"safety: {allocation['safety_pct']:.0%}  "
-                f"hedge: {allocation['hedge_pct']:.0%}  "
-                f"cash: {allocation['cash_pct']:.0%}"
-            )
-    except Exception as e:
-        log.warning(f"Could not compute allocation ({e}) — defaulting to 100% venture.")
+        # 3. Generate today's predictions using the current winning model
+        log.info("Generating predictions...")
+        predictions = get_predictions_today(symbols)
+        log.info(f"Predictions ready: {len(predictions)} candidates")
 
-    # 4. Rebalance with retry (handles transient Webull API failures)
-    now_et = datetime.now(_ET).time()
-    if now_et > TRADING_DEADLINE:
-        msg = f"Past trading deadline ({now_et.strftime('%H:%M')} ET > 15:30 ET) — skipping rebalance."
-        log.warning(msg)
-        log_warning(msg)
-        return
+        if predictions.empty:
+            log.warning("No predictions generated — skipping rebalance.")
+            return
 
-    trader = Trader(dry_run=dry_run)
-    for attempt in range(1, MAX_RETRIES + 1):
+        _save_predictions_to_s3(predictions)
+
+        # 3.5. Compute today's bucket allocation
+        allocation = None
         try:
-            trader.rebalance(predictions, allocation=allocation)
-            return   # success
+            meta = load_metadata()
+            if meta:
+                artifacts = load_artifacts(meta["winner"])
+                regime, vix = get_today_regime_vix()
+                allocation  = get_allocation_today(artifacts, regime, vix)
+                log.info(
+                    f"Allocation — venture: {allocation['venture_pct']:.0%}  "
+                    f"safety: {allocation['safety_pct']:.0%}  "
+                    f"hedge: {allocation['hedge_pct']:.0%}  "
+                    f"cash: {allocation['cash_pct']:.0%}"
+                )
         except Exception as e:
-            msg = f"{type(e).__name__}: {e}"
-            if attempt < MAX_RETRIES:
-                warning = (
-                    f"Rebalance attempt {attempt}/{MAX_RETRIES} failed: {msg}. "
-                    f"Retrying in 5 min..."
-                )
-                log.error(warning)
-                log_warning(warning)
-                time.sleep(RETRY_DELAY)
-            else:
-                final = (
-                    f"All {MAX_RETRIES} rebalance attempts failed — skipping today. "
-                    f"Last error: {msg}"
-                )
-                log.error(final)
-                log_warning(final)
+            log.warning(f"Could not compute allocation ({e}) — defaulting to 100% venture.")
+
+        # 4. Rebalance with retry (handles transient Webull API failures)
+        now_et = datetime.now(_ET).time()
+        if now_et > TRADING_DEADLINE:
+            msg = f"Past trading deadline ({now_et.strftime('%H:%M')} ET > 15:30 ET) — skipping rebalance."
+            log.warning(msg)
+            log_warning(msg)
+            return
+
+        trader = Trader(dry_run=dry_run)
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                trader.rebalance(predictions, allocation=allocation)
+                return   # success
+            except Exception as e:
+                msg = f"{type(e).__name__}: {e}"
+                if attempt < MAX_RETRIES:
+                    warning = (
+                        f"Rebalance attempt {attempt}/{MAX_RETRIES} failed: {msg}. "
+                        f"Retrying in 5 min..."
+                    )
+                    log.error(warning)
+                    log_warning(warning)
+                    time.sleep(RETRY_DELAY)
+                else:
+                    final = (
+                        f"All {MAX_RETRIES} rebalance attempts failed — skipping today. "
+                        f"Last error: {msg}"
+                    )
+                    log.error(final)
+                    log_warning(final)
+
+    except Exception as e:
+        msg = f"{type(e).__name__}: {e}"
+        log.error(f"Fatal error during trading run: {msg}", exc_info=True)
+        try:
+            log_error(msg)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

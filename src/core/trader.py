@@ -50,7 +50,7 @@ REBALANCE_THRESHOLD    = 0.02  # minimum weight delta to trigger a trade
 HALF_KELLY             = True
 MIN_TRADE_VALUE        = 1.0   # ignore positions worth less than $1 (rounding)
 MAX_CAPITAL            = None  # None = full account control
-CLF_PROB_THRESHOLD     = 0.60  # minimum model confidence to include a position
+CLF_PROB_THRESHOLD     = 0.52  # minimum model confidence (kelly gate at >0.50; 0.52 gives slight extra margin)
 MIN_POSITION_WEIGHT    = 0.03  # drop positions that would be < 3% of portfolio
 MAX_VENTURE_POSITIONS  = 10    # buy/target top-N venture stocks by Kelly score
 HOLD_ZONE_MAX_RANK     = 30    # keep held positions ranked up to this (reduces churn)
@@ -341,6 +341,15 @@ class Trader:
         hedge_pct   = allocation["hedge_pct"]   if allocation else 0.0
         held        = current_weights or {}
 
+        above_threshold = predictions_today[
+            predictions_today["clf_prob"] >= CLF_PROB_THRESHOLD
+        ]
+        log.info(
+            f"Predictions: {len(predictions_today)} total, "
+            f"{len(above_threshold)} with clf_prob >= {CLF_PROB_THRESHOLD}, "
+            f"{(predictions_today['reg_pred'] > 0).sum()} with reg_pred > 0"
+        )
+
         candidates = predictions_today[
             (predictions_today["clf_prob"] >= CLF_PROB_THRESHOLD) &
             (predictions_today["reg_pred"] > 0)
@@ -351,6 +360,7 @@ class Trader:
             axis=1,
         )
         candidates = candidates[candidates["kelly"] > 0].sort_values("kelly", ascending=False).reset_index(drop=True)
+        log.info(f"Venture candidates with kelly > 0: {len(candidates)}")
 
         target = {}
 
