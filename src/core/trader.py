@@ -579,7 +579,9 @@ class Trader:
         update_position_highs(current_prices, actual_after)
 
         # Log to dashboard — pass bot positions and manual positions separately
-        log_rebalance(account, effective_pv, bot_details, manual_details, executed_trades)
+        log_rebalance(account, effective_pv, bot_details, manual_details, executed_trades,
+                      regime=allocation.get("regime") if allocation else None,
+                      vix=allocation.get("vix") if allocation else None)
 
         log.info("Rebalance complete")
         log.info("=" * 55)

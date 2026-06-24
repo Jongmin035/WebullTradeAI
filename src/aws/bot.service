@@ -13,6 +13,8 @@ User=root
 # correctly, unlike Docker's --env-file which passes them literally)
 ExecStart=/usr/bin/docker run --rm \
     -v /home/ec2-user/WebullTradeAI/.env:/app/.env:ro \
+    -v /home/ec2-user/WebullTradeAI/src/data:/app/src/data \
+    -v /home/ec2-user/WebullTradeAI/src/models:/app/src/models:ro \
     webull-bot:latest
 
 Restart=on-failure

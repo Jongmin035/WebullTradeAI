@@ -374,28 +374,35 @@ def get_today_regime_vix():
 
     Returns
     -------
-    (regime, vix) — regime is 'bull' | 'sideways' | 'bear', vix is float
+    (regime, vix) — regime is 'bull' | 'sideways' | 'bear', vix is float.
+    Always returns a valid regime — falls back to ('sideways', 20.0) on any
+    data failure so the allocator always has a sensible input.
     """
     import yfinance as yf
 
-    today = pd.Timestamp.today().normalize()
-    start = (today - pd.Timedelta(days=300)).strftime("%Y-%m-%d")
-    end   = today.strftime("%Y-%m-%d")
-
-    spy_regimes = fetch_spy_regimes(start, end)
-    regime = spy_regimes.iloc[-1] if not spy_regimes.empty else "sideways"
-
     try:
-        vix_df = yf.download(
-            "^VIX",
-            start=(today - pd.Timedelta(days=5)).strftime("%Y-%m-%d"),
-            end=end,
-            progress=False,
-            auto_adjust=True,
-        )
-        vix = float(vix_df["Close"].iloc[-1]) if not vix_df.empty else 20.0
-    except Exception:
-        vix = 20.0
+        today = pd.Timestamp.today().normalize()
+        start = (today - pd.Timedelta(days=300)).strftime("%Y-%m-%d")
+        end   = today.strftime("%Y-%m-%d")
+
+        spy_regimes = fetch_spy_regimes(start, end)
+        regime = spy_regimes.iloc[-1] if not spy_regimes.empty else "sideways"
+
+        try:
+            vix_df = yf.download(
+                "^VIX",
+                start=(today - pd.Timedelta(days=5)).strftime("%Y-%m-%d"),
+                end=end,
+                progress=False,
+                auto_adjust=True,
+            )
+            vix = float(vix_df["Close"].iloc[-1]) if not vix_df.empty else 20.0
+        except Exception:
+            vix = 20.0
+
+    except Exception as e:
+        log.warning(f"Regime detection failed ({e}) — defaulting to sideways/VIX 20")
+        regime, vix = "sideways", 20.0
 
     log.info(f"Today's regime: {regime}  VIX: {vix:.1f}")
     return regime, vix
@@ -424,6 +431,10 @@ def get_allocation_today(artifacts, regime, vix):
     flat_params = artifacts.get("allocator_params")
     if flat_params is None:
         log.warning("No allocator_params in artifacts — defaulting to 100% venture")
-        return {"venture_pct": 1.0, "safety_pct": 0.0, "hedge_pct": 0.0, "cash_pct": 0.0}
+        return {"venture_pct": 1.0, "safety_pct": 0.0, "hedge_pct": 0.0, "cash_pct": 0.0,
+                "regime": regime, "vix": round(vix, 1)}
 
-    return predict_allocation(flat_params, regime, vix)
+    result = predict_allocation(flat_params, regime, vix)
+    result["regime"] = regime
+    result["vix"]    = round(vix, 1)
+    return result

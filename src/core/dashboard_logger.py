@@ -267,7 +267,7 @@ def _append_trades(trades, today_str, timestamp):
 
 # --- Public API ---
 
-def log_rebalance(account, effective_pv, bot_positions, manual_positions, trades):
+def log_rebalance(account, effective_pv, bot_positions, manual_positions, trades, regime=None, vix=None):
     """
     Record the results of a completed rebalance.
 
@@ -329,6 +329,10 @@ def log_rebalance(account, effective_pv, bot_positions, manual_positions, trades
         # Full account from Webull (for reference)
         "net_account_value": round(account.get("net_account_value", effective_pv), 2),
         "cash_balance":      round(account.get("cash_balance", 0), 2),
+
+        # Market context
+        "regime": regime,
+        "vix":    vix,
 
         # Positions
         "positions":         bot_positions,
