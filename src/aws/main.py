@@ -32,6 +32,22 @@ for d in (SRC_DIR, os.path.join(SRC_DIR, "core"), os.path.join(SRC_DIR, "pipelin
 
 load_dotenv(dotenv_path=os.path.join(ROOT_DIR, ".env"))
 
+_ET = ZoneInfo("America/New_York")
+
+
+def _write_diag(label):
+    """Write a one-line marker to S3 diagnostics/ so we can pinpoint where crashes happen."""
+    try:
+        import boto3
+        boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1")).put_object(
+            Bucket=os.getenv("AWS_S3_BUCKET", "webull-trade-ai"),
+            Key=f"diagnostics/{datetime.now(_ET).strftime('%Y-%m-%d')}-{label}.txt",
+            Body=f"{label} at {datetime.now(_ET).isoformat()}",
+            ContentType="text/plain",
+        )
+    except Exception:
+        pass
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)s  %(message)s",
@@ -44,7 +60,6 @@ VERSION = os.environ.get("GIT_SHA", "dev")
 MAX_RETRIES      = 2
 RETRY_DELAY      = 5 * 60                    # seconds between retry attempts (5 minutes)
 TRADING_DEADLINE = dtime(15, 30)             # exit if past 3:30 PM ET before rebalancing
-_ET              = ZoneInfo("America/New_York")
 
 
 def _is_market_open():
@@ -85,30 +100,41 @@ def _save_predictions_to_s3(predictions):
 
 
 def main(dry_run=False):
-    from dashboard_logger import restore_state_from_s3, log_warning, log_error
-    from data_pipeline import fetch_sp500_symbols, ETF_SYMBOLS
-    from model_store import load_artifacts, load_metadata
-    from predict import get_predictions_today, get_today_regime_vix, get_allocation_today, VERSION as PREDICT_VERSION
-    from trader import Trader, VERSION as TRADER_VERSION
+    _write_diag("main-called")
 
-    log.info(f"bot v{VERSION}  trader v{TRADER_VERSION}  predict v{PREDICT_VERSION}")
-
-    # 0. Exit immediately if today is a holiday or weekend
-    if not _is_market_open():
-        log.info("Market closed today — nothing to do.")
+    # Restore state FIRST (so log_error can write stats.json on any later failure)
+    log_error = None
+    log_warning = None
+    try:
+        from dashboard_logger import restore_state_from_s3, log_warning, log_error
+        log.info("Restoring state from S3 (if needed)...")
+        restore_state_from_s3()
+        _write_diag("restore-ok")
+    except Exception as e:
+        _write_diag(f"restore-failed-{type(e).__name__}")
+        log.error(f"Failed to restore state: {e}", exc_info=True)
         return
 
-    # 1. Restore any missing state files from S3
-    log.info("Restoring state from S3 (if needed)...")
-    restore_state_from_s3()
-
-    # 2. Load symbol list
-    symbols = list(set(fetch_sp500_symbols()) | set(ETF_SYMBOLS))
-    log.info(f"Universe: {len(symbols)} symbols ({len(ETF_SYMBOLS)} ETFs included)")
-
     try:
-        # 3. Generate today's predictions using the current winning model
+        from data_pipeline import fetch_sp500_symbols, ETF_SYMBOLS
+        from model_store import load_artifacts, load_metadata
+        from predict import get_predictions_today, get_today_regime_vix, get_allocation_today, VERSION as PREDICT_VERSION
+        from trader import Trader, VERSION as TRADER_VERSION
+
+        log.info(f"bot v{VERSION}  trader v{TRADER_VERSION}  predict v{PREDICT_VERSION}")
+
+        # 0. Exit immediately if today is a holiday or weekend
+        if not _is_market_open():
+            log.info("Market closed today — nothing to do.")
+            return
+
+        # 1. Load symbol list
+        symbols = list(set(fetch_sp500_symbols()) | set(ETF_SYMBOLS))
+        log.info(f"Universe: {len(symbols)} symbols ({len(ETF_SYMBOLS)} ETFs included)")
+
+        # 2. Generate today's predictions using the current winning model
         log.info("Generating predictions...")
+        _write_diag("predictions-start")
         predictions = get_predictions_today(symbols)
         log.info(f"Predictions ready: {len(predictions)} candidates")
 
@@ -118,7 +144,7 @@ def main(dry_run=False):
 
         _save_predictions_to_s3(predictions)
 
-        # 3.5. Compute today's bucket allocation
+        # 2.5. Compute today's bucket allocation
         allocation = None
         try:
             meta = load_metadata()
@@ -135,7 +161,7 @@ def main(dry_run=False):
         except Exception as e:
             log.warning(f"Could not compute allocation ({e}) — defaulting to 100% venture.")
 
-        # 4. Rebalance with retry (handles transient Webull API failures)
+        # 3. Rebalance with retry (handles transient Webull API failures)
         now_et = datetime.now(_ET).time()
         if now_et > TRADING_DEADLINE:
             msg = f"Past trading deadline ({now_et.strftime('%H:%M')} ET > 15:30 ET) — skipping rebalance."
@@ -169,10 +195,11 @@ def main(dry_run=False):
     except Exception as e:
         msg = f"{type(e).__name__}: {e}"
         log.error(f"Fatal error during trading run: {msg}", exc_info=True)
+        _write_diag(f"fatal-{type(e).__name__}")
         try:
             log_error(msg)
-        except Exception:
-            pass
+        except Exception as e2:
+            _write_diag(f"log-error-failed-{type(e2).__name__}")
 
 
 if __name__ == "__main__":
