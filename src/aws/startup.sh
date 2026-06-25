@@ -15,6 +15,9 @@ if [ -z "$BUCKET" ] || [ -z "$AWS_ACCESS_KEY_ID" ]; then
     exit 0
 fi
 
+echo "config-pull: startup.sh started at $(date -u)" | \
+    aws s3 cp - "s3://$BUCKET/diagnostics/$(date +%Y-%m-%d)-startup-begin.txt" || true
+
 echo "config-pull: pulling service files from s3://$BUCKET/config/"
 
 aws s3 cp "s3://$BUCKET/config/bot.service"     /etc/systemd/system/bot.service
@@ -38,5 +41,14 @@ docker tag  "${ECR}/webull-bot:latest" webull-bot:latest
 
 docker pull "${ECR}/webull-retrain:latest"
 docker tag  "${ECR}/webull-retrain:latest" webull-retrain:latest
+
+echo "config-pull: docker pull ok at $(date -u)" | \
+    aws s3 cp - "s3://$BUCKET/diagnostics/$(date +%Y-%m-%d)-docker-pull-ok.txt" || true
+
+# Self-update: keep this script current on the host so future changes take effect.
+# Downloads the version from S3 (uploaded by CI or manually) for use on next boot.
+aws s3 cp "s3://$BUCKET/config/startup.sh" "${0}.new" 2>/dev/null \
+    && mv "${0}.new" "$0" \
+    || true
 
 echo "config-pull: done"
