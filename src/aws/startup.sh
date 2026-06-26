@@ -2,18 +2,12 @@
 # Runs on every boot via config-pull.service (Before=bot.timer / retrain.timer).
 # Downloads the latest service files from S3, then pulls the latest Docker images
 # from ECR so bot.service and retrain.service always run the newest code.
+#
+# Uses the EC2 IAM instance role (webull-bot-ec2) for AWS access — no .env credentials needed.
 set -euo pipefail
 
-ENV_FILE=/home/ec2-user/WebullTradeAI/.env
-BUCKET=$(grep '^AWS_S3_BUCKET=' "$ENV_FILE" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d "'")
-export AWS_ACCESS_KEY_ID=$(grep '^AWS_ACCESS_KEY_ID=' "$ENV_FILE" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d "'")
-export AWS_SECRET_ACCESS_KEY=$(grep '^AWS_SECRET_ACCESS_KEY=' "$ENV_FILE" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d "'")
-export AWS_DEFAULT_REGION=$(grep '^AWS_REGION=' "$ENV_FILE" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d "'")
-
-if [ -z "$BUCKET" ] || [ -z "$AWS_ACCESS_KEY_ID" ]; then
-    echo "config-pull: missing bucket or credentials in .env — skipping"
-    exit 0
-fi
+BUCKET="webull-trade-ai"
+export AWS_DEFAULT_REGION="us-east-1"
 
 echo "config-pull: startup.sh started at $(date -u)" | \
     aws s3 cp - "s3://$BUCKET/diagnostics/$(date +%Y-%m-%d)-startup-begin.txt" || true
