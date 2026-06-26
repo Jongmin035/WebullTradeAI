@@ -21,6 +21,9 @@ aws s3 cp "s3://$BUCKET/config/retrain.timer"   /etc/systemd/system/retrain.time
 
 systemctl daemon-reload
 
+# Remove dangling images before pulling so old layers don't fill the disk.
+docker image prune -f 2>&1 | tail -1 || true
+
 # Pull latest Docker images from ECR so the next run uses the newest code.
 # GitHub Actions pushes a new image on every git push to main.
 echo "config-pull: logging in to ECR and pulling latest images"
