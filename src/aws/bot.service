@@ -26,19 +26,9 @@ SyslogIdentifier=webull-bot
 
 # On weekdays, write Docker exit result to S3 (for crash diagnostics), then shut down.
 # On weekends (Sat=6, Sun=7), retrain may be running — skip shutdown.
-# $SERVICE_RESULT and $EXIT_CODE are set by systemd: result is success/exit-code/signal/timeout.
-ExecStopPost=/bin/bash -c '\
-    ENV=/home/ec2-user/WebullTradeAI/.env; \
-    KEY=$(grep "^AWS_ACCESS_KEY_ID=" "$ENV" 2>/dev/null | cut -d= -f2- | tr -d "\""); \
-    SEC=$(grep "^AWS_SECRET_ACCESS_KEY=" "$ENV" 2>/dev/null | cut -d= -f2- | tr -d "\""); \
-    REG=$(grep "^AWS_REGION=" "$ENV" 2>/dev/null | cut -d= -f2- | tr -d "\""); \
-    BKT=$(grep "^AWS_S3_BUCKET=" "$ENV" 2>/dev/null | cut -d= -f2- | tr -d "\""); \
-    export AWS_ACCESS_KEY_ID="$KEY" AWS_SECRET_ACCESS_KEY="$SEC" AWS_DEFAULT_REGION="$REG"; \
-    D=$(date +%%Y-%%m-%%d); \
-    [ -n "$BKT" ] && [ -n "$KEY" ] && \
-        echo "result=$SERVICE_RESULT exit=$EXIT_CODE at $(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ)" | \
-        aws s3 cp - "s3://$BKT/diagnostics/$D-bot-exit.txt" 2>/dev/null || true; \
-    day=$(date +%%u); if [ "$day" -ge 6 ]; then exit 0; fi; sudo /sbin/shutdown -h now'
+# Uses EC2 IAM role for S3 access — no .env credentials needed.
+# $SERVICE_RESULT and $EXIT_CODE are substituted by systemd before execution.
+ExecStopPost=/bin/bash -c 'export AWS_DEFAULT_REGION=us-east-1; D=$(date +%%Y-%%m-%%d); echo "result=$SERVICE_RESULT exit=$EXIT_CODE at $(date -u)" | aws s3 cp - "s3://webull-trade-ai/diagnostics/$D-bot-exit.txt" 2>/dev/null || true; day=$(date +%%u); if [ "$day" -ge 6 ]; then exit 0; fi; sudo /sbin/shutdown -h now'
 
 [Install]
 WantedBy=multi-user.target
