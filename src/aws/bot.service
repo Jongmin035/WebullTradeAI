@@ -4,6 +4,8 @@ After=network-online.target docker.service
 Wants=network-online.target
 StartLimitIntervalSec=300
 StartLimitBurst=3
+# If the bot exhausts all retries, power off so EC2 doesn't run all day.
+StartLimitAction=poweroff
 
 [Service]
 Type=oneshot
@@ -24,11 +26,14 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=webull-bot
 
-# On weekdays, write Docker exit result to S3 (for crash diagnostics), then shut down.
-# On weekends (Sat=6, Sun=7), retrain may be running — skip shutdown.
-# Uses EC2 IAM role for S3 access — no .env credentials needed.
-# $SERVICE_RESULT and $EXIT_CODE are substituted by systemd before execution.
-ExecStopPost=/bin/bash -c 'export AWS_DEFAULT_REGION=us-east-1; D=$(date +%%Y-%%m-%%d); echo "result=$SERVICE_RESULT exit=$EXIT_CODE at $(date -u)" | aws s3 cp - "s3://webull-trade-ai/diagnostics/$D-bot-exit.txt" 2>/dev/null || true; day=$(date +%%u); if [ "$day" -ge 6 ]; then exit 0; fi; sudo /sbin/shutdown -h now'
+# Two independent ExecStopPost lines: systemd runs each regardless of whether
+# the previous one failed, so shutdown is never blocked by a logging error.
+
+# 1. Log exit result to S3 for diagnostics (non-critical).
+ExecStopPost=/bin/bash -c 'export AWS_DEFAULT_REGION=us-east-1; D=$(date +%%Y-%%m-%%d); echo "result=$SERVICE_RESULT exit=$EXIT_CODE at $(date -u)" | aws s3 cp - "s3://webull-trade-ai/diagnostics/$D-bot-exit.txt" 2>/dev/null || true'
+
+# 2. Shut down on weekdays. On weekends (Sat=6, Sun=7) skip — retrain may still be running.
+ExecStopPost=/bin/bash -c 'day=$(date +%%u); [ "$day" -ge 6 ] && exit 0; /sbin/shutdown -h now'
 
 [Install]
 WantedBy=multi-user.target

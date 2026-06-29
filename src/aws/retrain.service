@@ -18,15 +18,13 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=webull-retrain
 
-# Kill the container and trigger ExecStopPost (EC2 shutdown) if retrain
-# exceeds 8 hours — 2× the expected ~4h runtime. Prevents runaway charges.
+# Kill the container if retrain exceeds 8 hours — prevents runaway charges.
 TimeoutStartSec=8h
 TimeoutStopSec=60
 
-# Shut down after retrain completes (success or failure) on weekends.
-# retrain.py ran shutdown internally pre-Docker, but that doesn't work inside
-# a container — ExecStopPost runs on the EC2 host after the container exits.
-ExecStopPost=/bin/bash -c 'day=$(date +%%u); if [ "$day" -lt 6 ]; then exit 0; fi; sudo /sbin/shutdown -h now'
+# Always shut down after retrain (success, failure, or timeout).
+# Single command with no bash logic — nothing that can fail or syntax-error.
+ExecStopPost=/sbin/shutdown -h now
 
 [Install]
 WantedBy=multi-user.target
