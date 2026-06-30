@@ -58,7 +58,9 @@ def load_peak(current_value):
     """Load the saved all-time-high portfolio value. Returns current_value if no history."""
     if os.path.exists(PEAK_FILE):
         with open(PEAK_FILE) as f:
-            return float(json.load(f)["peak"])
+            peak = json.load(f)["peak"]
+        if peak is not None:
+            return float(peak)
     return current_value
 
 
