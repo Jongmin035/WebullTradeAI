@@ -1,6 +1,5 @@
 [Unit]
 Description=Run WebullTradeAI bot daily at midday
-Requires=bot.service
 After=config-pull.service
 
 [Timer]

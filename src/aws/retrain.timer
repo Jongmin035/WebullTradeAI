@@ -1,6 +1,5 @@
 [Unit]
 Description=Run WebullTradeAI weekly model retrain every Sunday night
-Requires=retrain.service
 
 [Timer]
 # Saturday 12:00 UTC = 8:00 AM ET = 5:00 AM PT
