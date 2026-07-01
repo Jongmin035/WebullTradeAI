@@ -21,6 +21,14 @@ aws s3 cp "s3://$BUCKET/config/retrain.timer"   /etc/systemd/system/retrain.time
 
 systemctl daemon-reload
 
+# Ensure bot.service only runs via bot.timer (not directly at boot).
+# If bot.service was ever enabled directly, it starts immediately at every boot
+# regardless of the OnCalendar timer schedule — disable it so the timer controls it.
+systemctl disable bot.service    2>/dev/null || true
+systemctl disable retrain.service 2>/dev/null || true
+systemctl enable  bot.timer      2>/dev/null || true
+systemctl enable  retrain.timer  2>/dev/null || true
+
 # Remove dangling images before pulling so old layers don't fill the disk.
 docker image prune -f 2>&1 | tail -1 || true
 

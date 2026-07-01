@@ -144,6 +144,7 @@ class Trader:
         if res.status_code != 200:
             raise RuntimeError(f"Failed to fetch account balance: {res.text}")
         data = res.json()
+        log.info(f"Webull account balance raw fields: { {k: v for k, v in data.items()} }")
         return {
             "net_account_value": float(data.get("total_net_liquidation_value", 0)),
             "cash_balance":      float(data.get("cash_balance", data.get("cash", 0))),
