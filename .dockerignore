@@ -7,7 +7,6 @@ __pycache__/
 *.pyo
 src/state/
 src/dashboard/stats.json
-src/dashboard/index.html
 src/dashboard/history.html
 .env
 docker/
