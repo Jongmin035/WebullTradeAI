@@ -436,6 +436,11 @@ class Trader:
 
         account         = self.get_account_snapshot()
         portfolio_value = account["net_account_value"] if cap is None else min(account["net_account_value"], cap)
+        # Pre-sell settled cash estimate: total account value minus total stock value.
+        # Computed from the pre-sell snapshot so today's sell proceeds (T+1 unsettled)
+        # are not included. More reliable than account["cash_balance"] which Webull
+        # returns as 0 even when cash is available (field name mismatch in their API).
+        pre_sell_cash = max(account["net_account_value"] - account["market_value"], 0)
         cap_str         = "no limit" if cap is None else f"${cap:,.2f}"
         log.info(f"Capital cap: {cap_str}  |  Using: ${portfolio_value:,.2f}")
         if allocation:
@@ -560,9 +565,8 @@ class Trader:
             # Execute buys in descending order of size (highest Kelly first) and stop
             # when settled cash is exhausted.
             if buys:
-                settled_cash = self.get_account_snapshot()["cash_balance"]
-                log.info(f"Settled cash for buys: ${settled_cash:,.2f}")
-                remaining = settled_cash
+                log.info(f"Pre-sell settled cash available for buys: ${pre_sell_cash:,.2f}")
+                remaining = pre_sell_cash
                 for symbol, dollar_amount in sorted(buys, key=lambda x: x[1], reverse=True):
                     required = dollar_amount * 1.02  # Webull requires 2% buffer
                     if remaining < required:
