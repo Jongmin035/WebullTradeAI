@@ -587,14 +587,16 @@ class Trader:
             expected_after = {sym for sym, w in target_weights.items() if w > 0}
             self._reconcile_post_trade(expected_after, effective_pv)
 
-        # Update high-water marks using actual post-trade positions, not target weights.
-        # target_weights excludes positions kept below the rebalance threshold, so using
-        # it would strip stop-loss protection from small but genuinely held positions.
-        actual_after = set(self.get_position_details(effective_pv).keys()) - set(cmds.get("manual_symbols", []))
+        # Update high-water marks and capture post-trade positions for the dashboard.
+        # Use actual post-trade state, not target_weights or pre-trade bot_details.
+        post_trade_details  = self.get_position_details(effective_pv)
+        post_bot_details    = {sym: d for sym, d in post_trade_details.items() if sym not in manual}
+        post_manual_details = {sym: d for sym, d in post_trade_details.items() if sym in manual}
+        actual_after        = set(post_bot_details.keys())
         update_position_highs(current_prices, actual_after)
 
-        # Log to dashboard — pass bot positions and manual positions separately
-        log_rebalance(account, effective_pv, bot_details, manual_details, executed_trades,
+        # Log to dashboard — use post-trade positions so the dashboard reflects reality
+        log_rebalance(account, effective_pv, post_bot_details, post_manual_details, executed_trades,
                       regime=allocation.get("regime") if allocation else None,
                       vix=allocation.get("vix") if allocation else None)
 
