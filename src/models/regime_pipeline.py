@@ -1,16 +1,15 @@
 """
 Regime detection for SPY.
 
-Detects daily market regime from SPY using three signals:
+Detects daily market regime from SPY using two primary signals:
   1. SMA crossover (SMA50 vs SMA200 + 0.5% buffer) — structural trend direction
-  2. 21-day SPY rolling return — short-term momentum confirmation
-  3. VIX level — market fear / uncertainty modifier
-  ADX is used only for bear confirmation (avoids calling bear on short-term dips).
+  2. VIX level — market fear / uncertainty modifier
+  ADX + 21-day return are used only for bear confirmation (avoids false bear calls on dips).
 
 Final labels:
-  Bull     : SMA50 > SMA200 + 21d return > 0, AND VIX < 30
+  Bull     : SMA50 > SMA200 AND VIX < 30
   Bear     : (bearish SMA + ADX > 25 + 21d return < 0) OR VIX >= 40
-  Sideways : everything else (includes "structurally bullish but VIX >= 30")
+  Sideways : everything else (SMA crossover unclear, or VIX 30-39)
 """
 
 import sys
@@ -81,7 +80,7 @@ def fetch_spy_regimes(start, end):
     vix = vix.reindex(spy_feat.index).ffill()
 
     regime = pd.Series("sideways", index=spy_feat.index, name="regime")
-    regime[bullish & short_up] = "bull"               # ADX not required — direction + momentum is enough
+    regime[bullish] = "bull"                           # SMA50 > SMA200 is sufficient — no short-term filter
     regime[bearish & trending & short_dn] = "bear"    # ADX still required — avoids calling bear on a dip
     regime[(regime == "bull") & (vix >= VIX_DAMPENING)] = "sideways"
     regime[vix >= VIX_PANIC] = "bear"
