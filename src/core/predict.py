@@ -408,33 +408,35 @@ def get_today_regime_vix():
     return regime, vix
 
 
+# Target allocations per regime:
+#   bull:     60% venture picks + 25% SPY (filler) + 15% cash
+#   sideways: 40% venture picks + 20% SPY (filler) + 40% cash
+#   bear:     15% venture picks + 30% SH/SQQQ (hedge) + 55% cash
+#
+# Goal: track 80-90% of bull index returns via high-conviction picks + SPY filler;
+# preserve capital in bear via cash + short ETFs; deploy cash aggressively in recovery.
+_REGIME_ALLOCATION = {
+    "bull":     {"venture_pct": 0.60, "safety_pct": 0.25, "hedge_pct": 0.00, "cash_pct": 0.15},
+    "sideways": {"venture_pct": 0.40, "safety_pct": 0.20, "hedge_pct": 0.00, "cash_pct": 0.40},
+    "bear":     {"venture_pct": 0.15, "safety_pct": 0.00, "hedge_pct": 0.30, "cash_pct": 0.55},
+}
+
+
 def get_allocation_today(artifacts, regime, vix):
     """
-    Return today's bucket allocation using allocator params stored in artifacts.
-
-    Falls back to 100% venture if no allocator params are present
-    (e.g., first retrain before walk-forward has enough history).
+    Return today's bucket allocation based on regime.
 
     Parameters
     ----------
-    artifacts : dict returned by load_artifacts()
+    artifacts : dict returned by load_artifacts() — unused, kept for signature compat
     regime    : str — 'bull' | 'sideways' | 'bear'
     vix       : float — current VIX level
 
     Returns
     -------
-    dict: venture_pct, safety_pct, hedge_pct, cash_pct
+    dict: venture_pct, safety_pct, hedge_pct, cash_pct, regime, vix
     """
-    sys.path.insert(0, os.path.join(_src, "models"))
-    from allocator import predict_allocation
-
-    flat_params = artifacts.get("allocator_params")
-    if flat_params is None:
-        log.warning("No allocator_params in artifacts — defaulting to 100% venture")
-        return {"venture_pct": 1.0, "safety_pct": 0.0, "hedge_pct": 0.0, "cash_pct": 0.0,
-                "regime": regime, "vix": round(vix, 1)}
-
-    result = predict_allocation(flat_params, regime, vix)
-    result["regime"] = regime
-    result["vix"]    = round(vix, 1)
-    return result
+    alloc = _REGIME_ALLOCATION.get(regime, _REGIME_ALLOCATION["sideways"]).copy()
+    alloc["regime"] = regime
+    alloc["vix"]    = round(vix, 1)
+    return alloc

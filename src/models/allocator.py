@@ -27,23 +27,21 @@ REGIMES     = ["bull", "sideways", "bear"]
 
 VIX_BASE      = 20   # below this VIX level: no adjustment applied
 VIX_CAP       = 40   # above this VIX level: maximum adjustment applied
-VENTURE_FLOOR = 0.30 # minimum venture allocation regardless of regime
+VENTURE_FLOOR = 0.15 # minimum venture allocation regardless of regime
 
 MIN_TRAIN_MONTHS = 12   # months of history before allocator starts optimizing
 
-# Initial params: contrarian (Buffett-style) — accumulate cash in bull markets,
-# deploy aggressively during bear markets / recoveries.
+# Initial params targeting index-tracking in bull, capital preservation in bear.
 # Approximate starting allocations (softmax of these weights):
-#   bull:     ~14% venture, 22% safety,  3% hedge, 61% cash  — wait for the crash
-#   sideways: ~28% venture, 23% safety, 10% hedge, 38% cash  — balanced
-#   bear:     ~53% venture,  7% safety, 32% hedge,  7% cash  — buy the dip + hedge
-# VIX slope 0.3: at peak VIX (40+), shifts ~16% venture → hedge during the worst
-# of the crash, then naturally unwinds as VIX calms and the recovery begins.
+#   bull:     ~60% venture, 25% safety(SPY),  0% hedge, 15% cash
+#   sideways: ~40% venture, 20% safety(SPY),  0% hedge, 40% cash
+#   bear:     ~15% venture,  0% safety,       30% hedge(SH/SQQQ), 55% cash
+# VIX slope 0.3: at peak VIX (40+), shifts some venture → hedge during worst of crash.
 _INIT = np.array([
-    0.0,  0.5, -1.5,  1.5,   # bull:     cash-heavy, some safety
-    0.5,  0.3, -0.5,  0.8,   # sideways: balanced, slight cash lean
-    1.5, -0.5,  1.0, -0.5,   # bear:     venture + hedge (buy the dip)
-    0.3,                       # vix_slope: moderate hedge shift when VIX spikes
+    1.39,  0.51, -5.0,  0.0,   # bull:     60% venture, 25% SPY filler, ~0% hedge, 15% cash
+    0.0,  -0.69, -5.0,  0.0,   # sideways: 40% venture, 20% SPY filler, ~0% hedge, 40% cash
+   -1.30, -5.0,  -0.61, 0.0,   # bear:     15% venture, ~0% safety, 30% hedge, 55% cash
+    0.3,                         # vix_slope: moderate hedge shift when VIX spikes
 ])
 
 
