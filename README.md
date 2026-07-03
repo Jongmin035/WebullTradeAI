@@ -72,31 +72,35 @@ Predictions from the LSTM feed into a two-stage allocation system.
 
 ### Stage 1 — Regime Detection
 
-Market regime is detected daily from SPY using four signals:
+Market regime is detected daily from SPY using two primary signals:
 
 | Signal | Role |
 |---|---|
-| SMA50 vs SMA200 (±1% buffer) | Structural trend direction |
-| ADX14 > 25 | Confirms a real trend exists (not chop) |
-| 21-day SPY rolling return | Short-term momentum confirmation |
+| SMA50 vs SMA200 (±0.5% buffer) | Structural trend direction — primary signal for bull |
 | VIX level | Fear modifier — VIX ≥ 30 downgrades bull→sideways; VIX ≥ 40 forces bear |
+| ADX14 > 25 + 21-day SPY return | Used only for bear confirmation — avoids calling bear on a short-term dip |
 
 **Labels**: `bull` / `sideways` / `bear`
 
+- **Bull**: SMA50 > SMA200 AND VIX < 30
+- **Bear**: (SMA50 < SMA200 AND ADX > 25 AND 21-day return < 0) OR VIX ≥ 40
+- **Sideways**: everything else
+
 ### Stage 2 — Bucket Allocator
 
-A 13-parameter walk-forward optimizer (Nelder-Mead) maps `(regime, VIX)` to four portfolio buckets:
+Regime maps to hardcoded portfolio bucket targets:
 
-| Bucket | Contents | Typical allocation |
-|---|---|---|
-| **Venture** | Top S&P 500 stocks by Kelly criterion (see below) | 30–50% |
-| **Safety** | SPY, XLP, XLU (equal-weighted within bucket) | 20–40% |
-| **Hedge** | GLDM, SH, SQQQ (equal-weighted within bucket) | 0–15% |
-| **Cash** | Uninvested | 0–60% |
+| Regime | Venture | Safety (SPY) | Hedge (SH / SQQQ) | Cash |
+|---|---|---|---|---|
+| **Bull** | 60% | 25% | 0% | 15% |
+| **Sideways** | 40% | 20% | 0% | 40% |
+| **Bear** | 15% | 0% | 30% | 55% |
 
-The allocator is contrarian (Buffett-style): it holds more cash in bull markets and deploys aggressively during bear markets / recoveries. A VIX slope parameter shifts venture allocation toward hedge as VIX rises above 20.
+The goal in bull markets is to track the index: 60% in ML-selected stocks that should outperform, 25% directly in SPY as a neutral filler. In bear, SH and SQQQ provide short exposure that profits from further declines.
 
-Safety and hedge ETFs are not subject to the same ranking system as venture stocks. The allocator's `safety_pct` is the model's judgment of how much defensive exposure to hold; the ETFs within each bucket are always held at equal weight and are only exited if the model explicitly predicts a decline (`reg_pred < 0`).
+A VIX slope parameter in the underlying model shifts venture allocation toward hedge as VIX rises above 20 — this compounds with the VIX circuit breaker in `safeguards.py` (see below).
+
+Safety and hedge ETFs are not subject to the same ranking system as venture stocks. The allocator's `safety_pct` / `hedge_pct` determine how much to hold; the ETFs within each bucket are always held at equal weight.
 
 ### Stage 3 — Position Sizing (Kelly Criterion)
 
@@ -170,7 +174,7 @@ All credentials are loaded from environment variables (`.env`) and never hardcod
 | systemd `bot.service` | Runs the bot container on weekdays, shuts down EC2 when done |
 | systemd `retrain.service` | Runs the retrain container on Saturdays |
 
-**Cost**: ~$13/month (g5.xlarge billed only during runs — ~20 min/day + ~2 hr/week retrain; ECR storage ~$0.25/month).
+**Cost**: ~$13/month (g5.xlarge billed only during runs — ~20 min/day + ~2 hr/week retrain). ECR lifecycle policy keeps the last 3 tagged images per repo and expires untagged images after 1 day.
 
 ### Deployment pipeline
 
