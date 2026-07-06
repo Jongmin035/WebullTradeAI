@@ -56,6 +56,8 @@ def fetch_spy_regimes(start, end):
     spy_df = spy[["Open", "High", "Low", "Close", "Volume"]].copy()
     spy_df.columns = ["open", "high", "low", "close", "volume"]
     spy_df.index = pd.to_datetime(spy_df.index)
+    if spy_df.index.tz is not None:
+        spy_df.index = spy_df.index.tz_convert(None)
     spy_df = spy_df.sort_index().reset_index().rename(columns={"index": "date", "Date": "date"})
 
     ind = Indicators(spy_df)
@@ -76,7 +78,8 @@ def fetch_spy_regimes(start, end):
 
     vix_raw = yf.download("^VIX", start=extended_start, end=end, auto_adjust=True, progress=False)
     vix = vix_raw["Close"].squeeze()
-    vix.index = pd.to_datetime(vix.index).tz_localize(None)
+    vix_idx = pd.to_datetime(vix.index)
+    vix.index = vix_idx.tz_convert(None) if vix_idx.tz is not None else vix_idx
     vix = vix.reindex(spy_feat.index).ffill()
 
     regime = pd.Series("sideways", index=spy_feat.index, name="regime")
