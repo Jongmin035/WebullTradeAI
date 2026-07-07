@@ -175,6 +175,80 @@ def download_data_from_s3():
             log.info(f"  {i}/{len(keys)} ready")
 
 
+def _migrate_parquets_if_needed():
+    """
+    Add new indicator columns to existing parquets if they are missing.
+    Called once after downloading old parquets from S3. The parquets store
+    OHLCV so all new indicators can be recomputed without re-fetching yfinance.
+    After this run, the updated parquets are uploaded to S3 in step 9, so
+    future retrains won't need to migrate again.
+    """
+    from indicators import Indicators
+    from data_pipeline import fetch_vix
+
+    NEW_COLS = ["gap", "pct_from_high_20d", "range_tightness", "recovery_slope",
+                "sma50_vs_sma200", "donchian_55_pos", "atr14_pct", "obv_zscore"]
+
+    files = [f for f in os.listdir(INDICATORS_DIR) if f.endswith(".parquet")]
+    if not files:
+        return
+
+    # Check one file — if it already has new columns, skip migration
+    sample = pd.read_parquet(os.path.join(INDICATORS_DIR, files[0]))
+    if all(c in sample.columns for c in NEW_COLS):
+        log.info("Parquets already have new indicator columns — skipping migration.")
+        return
+
+    log.info(f"Migrating {len(files)} parquets to add new indicator columns...")
+
+    # Fetch VIX once for the full history window
+    vix_start = "2005-01-01"
+    vix_end   = pd.Timestamp.today().strftime("%Y-%m-%d")
+    vix_df    = fetch_vix(vix_start, vix_end)
+
+    migrated, failed = 0, []
+    for fname in files:
+        fpath = os.path.join(INDICATORS_DIR, fname)
+        try:
+            existing = pd.read_parquet(fpath)
+            existing["date"] = pd.to_datetime(existing["date"])
+
+            if all(c in existing.columns for c in NEW_COLS):
+                continue  # already migrated
+
+            ohlcv_cols = [c for c in ["date", "open", "high", "low", "close", "volume"]
+                          if c in existing.columns]
+            ohlcv_df = existing[ohlcv_cols].copy()
+
+            ind = Indicators(ohlcv_df)
+            # Compute only the new columns from OHLCV stored in the parquet
+            (ind
+                .add_gap()
+                .add_pct_from_high(20)
+                .add_range_tightness(5)
+                .add_recovery_slope(5)
+                .add_sma50_vs_sma200()
+                .add_donchian(55)
+                .add_obv_zscore()
+                .add_atr_pct(14)
+            )
+            if vix_df is not None and "vix" not in existing.columns:
+                ind.add_vix(vix_df)
+
+            new_col_names = [c for c in NEW_COLS if c in ind.df.columns]
+            new_cols_df   = ind.df[["date"] + new_col_names].copy()
+
+            merged = existing.merge(new_cols_df, on="date", how="left")
+            merged.to_parquet(fpath, index=False)
+            migrated += 1
+        except Exception as e:
+            failed.append(fname)
+            log.warning(f"Migration failed for {fname}: {e}")
+
+    log.info(f"Migration complete: {migrated}/{len(files)} parquets updated."
+             + (f"  Failed: {failed[:5]}" if failed else ""))
+
+
 # ============================================================
 # Live performance stats
 # ============================================================
@@ -387,10 +461,17 @@ def _eval_months(clf_df):
     return set(all_months[-EVAL_MONTHS:])
 
 
-def eval_lstm(clf_df, reg_df):
-    """Walk-forward LSTM eval on last EVAL_MONTHS. Returns (predictions_df, last_models_dict)."""
+def eval_lstm(clf_df, reg_df, actual_df=None):
+    """
+    Walk-forward LSTM eval on last EVAL_MONTHS.
+    actual_df: DataFrame with horizon=1 regression targets used for backtest evaluation.
+               If None, falls back to reg_df (5-day targets used for training).
+    Returns (predictions_df, last_models_dict).
+    """
     clf_df["year_month"] = clf_df["date"].dt.to_period("M")
     reg_df["year_month"] = reg_df["date"].dt.to_period("M")
+    if actual_df is not None:
+        actual_df["year_month"] = actual_df["date"].dt.to_period("M")
     eval_set = _eval_months(clf_df)
     months   = sorted(clf_df["year_month"].unique())
     all_preds, last_models = [], {}
@@ -440,8 +521,11 @@ def eval_lstm(clf_df, reg_df):
         preds_reg = meta_reg[te_m_r][["date", "symbol"]].copy().reset_index(drop=True)
         preds_reg["reg_pred"] = reg_pred
         preds = preds_clf.merge(preds_reg, on=["date", "symbol"], how="inner")
+        # Use 1-day actual returns for backtest evaluation (realistic portfolio P&L)
+        # even though training uses 5-day labels
+        _actual_src = actual_df if actual_df is not None else reg_df
         actual = (
-            reg_df[reg_df["year_month"] == test_month][["date", "symbol", "target"]]
+            _actual_src[_actual_src["year_month"] == test_month][["date", "symbol", "target"]]
             .rename(columns={"target": "actual_return"})
         )
         preds = preds.merge(actual, on=["date", "symbol"], how="inner")
@@ -520,6 +604,7 @@ if __name__ == "__main__":
         rlog.begin_step("download_data")
         log.info("\n--- Downloading data from S3 ---")
         download_data_from_s3()
+        _migrate_parquets_if_needed()
         base_symbols = TEST_SYMBOLS if args.test else fetch_sp500_symbols()
         symbols      = list(set(base_symbols) | set(ETF_SYMBOLS))
         ALL_YEARS    = TEST_YEARS if args.test else ALL_YEARS
@@ -535,13 +620,18 @@ if __name__ == "__main__":
 
         # 3. Load datasets
         rlog.begin_step("load_data")
-        clf_df = load_all_symbols(symbols, target_type="classification", horizon=1)
-        reg_df = load_all_symbols(symbols, target_type="regression",     horizon=1)
-        clf_df = clf_df[clf_df["date"].dt.year.isin(ALL_YEARS)].reset_index(drop=True)
-        reg_df = reg_df[reg_df["date"].dt.year.isin(ALL_YEARS)].reset_index(drop=True)
-        clf_df["year_month"] = clf_df["date"].dt.to_period("M")
-        reg_df["year_month"] = reg_df["date"].dt.to_period("M")
-        log.info(f"Rows — clf: {len(clf_df):,}  reg: {len(reg_df):,}")
+        # Training uses 5-day forward labels: better signal for medium-term momentum
+        clf_df    = load_all_symbols(symbols, target_type="classification", horizon=5)
+        reg_df    = load_all_symbols(symbols, target_type="regression",     horizon=5)
+        # Backtest evaluation uses 1-day returns for realistic daily portfolio P&L
+        actual_df = load_all_symbols(symbols, target_type="regression",     horizon=1)
+        clf_df    = clf_df[clf_df["date"].dt.year.isin(ALL_YEARS)].reset_index(drop=True)
+        reg_df    = reg_df[reg_df["date"].dt.year.isin(ALL_YEARS)].reset_index(drop=True)
+        actual_df = actual_df[actual_df["date"].dt.year.isin(ALL_YEARS)].reset_index(drop=True)
+        clf_df["year_month"]    = clf_df["date"].dt.to_period("M")
+        reg_df["year_month"]    = reg_df["date"].dt.to_period("M")
+        actual_df["year_month"] = actual_df["date"].dt.to_period("M")
+        log.info(f"Rows — clf: {len(clf_df):,}  reg: {len(reg_df):,}  actual(1d): {len(actual_df):,}")
         start = clf_df["date"].min().strftime("%Y-%m-%d")
         end   = clf_df["date"].max().strftime("%Y-%m-%d")
         rlog.end_step(clf_rows=len(clf_df), reg_rows=len(reg_df),
@@ -556,11 +646,11 @@ if __name__ == "__main__":
         # 5. Evaluate LSTM
         rlog.begin_step("evaluate_lstm")
         log.info(f"\n--- Evaluating LSTM on last {EVAL_MONTHS} months ---")
-        lstm_preds, lstm_metrics, _ = eval_lstm(clf_df.copy(), reg_df.copy())
-        sharpes = {"lstm": round(lstm_metrics.get("sharpe", 0.0), 4)}
-        winner  = "lstm"
-        log.info(f"LSTM Sharpe: {sharpes['lstm']:.4f}")
-        rlog.end_step(winner=winner, sharpe=sharpes["lstm"])
+        lstm_preds, lstm_metrics, _ = eval_lstm(clf_df.copy(), reg_df.copy(), actual_df.copy())
+        sortinos = {"lstm": round(lstm_metrics.get("sortino", 0.0), 4)}
+        winner   = "lstm"
+        log.info(f"LSTM Sortino: {sortinos['lstm']:.4f}  Sharpe: {lstm_metrics.get('sharpe', 0.0):.4f}")
+        rlog.end_step(winner=winner, sortino=sortinos["lstm"], sharpe=lstm_metrics.get("sharpe", 0.0))
 
         # 6. Train final LSTM
         rlog.begin_step("train_final_lstm")
@@ -596,7 +686,7 @@ if __name__ == "__main__":
         save_artifacts(winner, artifacts)
         save_metadata(
             winner            = winner,
-            sharpe_scores     = sharpes,
+            sharpe_scores     = sortinos,
             trained_up_to     = clf_df["date"].max().date(),
             evaluation_months = EVAL_MONTHS,
         )

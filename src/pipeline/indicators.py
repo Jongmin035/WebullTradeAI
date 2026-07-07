@@ -137,6 +137,69 @@ class Indicators:
         )
         return self
 
+    def add_gap(self):
+        """Overnight gap: (today open - yesterday close) / yesterday close."""
+        prev_close = self.df["close"].shift(1).replace(0, np.nan)
+        self.df["gap"] = (self.df["open"] - prev_close) / prev_close
+        return self
+
+    def add_pct_from_high(self, window=20):
+        """How far below its recent high the stock is (0 = at high, 1 = 100% below)."""
+        rolling_high = self.df["close"].rolling(window).max()
+        self.df[f"pct_from_high_{window}d"] = (rolling_high - self.df["close"]) / rolling_high.replace(0, np.nan)
+        return self
+
+    def add_range_tightness(self, window=5):
+        """Price consolidation: small value → price is coiling (low volatility base)."""
+        rolling_high = self.df["close"].rolling(window).max()
+        rolling_low  = self.df["close"].rolling(window).min()
+        self.df["range_tightness"] = (rolling_high - rolling_low) / self.df["close"].replace(0, np.nan)
+        return self
+
+    def add_recovery_slope(self, window=5):
+        """5-day return — fills the gap between 3-day lag features and 21-day momentum."""
+        self.df["recovery_slope"] = self.df["close"].pct_change(window)
+        return self
+
+    def add_sma50_vs_sma200(self):
+        """Long-term trend health: positive = sma50 above sma200 (golden cross territory)."""
+        if "sma50" not in self.df.columns:
+            self.add_sma(50)
+        sma200 = self.df["close"].rolling(200).mean()
+        ratio = (self.df["sma50"] - sma200) / sma200.replace(0, np.nan)
+        self.df["sma50_vs_sma200"] = ratio.fillna(0.0)
+        return self
+
+    def add_donchian(self, window=55):
+        """Donchian channel position: 0 = at N-day low, 1 = at N-day high."""
+        rolling_high  = self.df["close"].rolling(window).max()
+        rolling_low   = self.df["close"].rolling(window).min()
+        channel_range = (rolling_high - rolling_low).replace(0, np.nan)
+        self.df[f"donchian_{window}_pos"] = (self.df["close"] - rolling_low) / channel_range
+        return self
+
+    def add_obv_zscore(self, window=20):
+        """On-Balance Volume z-scored over window days — captures accumulation/distribution."""
+        price_change = self.df["close"].diff()
+        direction = np.where(price_change > 0, 1, np.where(price_change < 0, -1, 0))
+        obv = (self.df["volume"] * direction).cumsum()
+        obv_std = obv.rolling(window).std().replace(0, np.nan)
+        self.df["obv_zscore"] = (obv - obv.rolling(window).mean()) / obv_std
+        return self
+
+    def add_atr_pct(self, window=14):
+        """ATR14 normalized by close price — stock's volatility in percentage terms."""
+        high  = self.df["high"]
+        low   = self.df["low"]
+        close = self.df["close"]
+        tr = pd.concat([
+            high - low,
+            (high - close.shift(1)).abs(),
+            (low  - close.shift(1)).abs(),
+        ], axis=1).max(axis=1)
+        self.df["atr14_pct"] = tr.rolling(window).mean() / close.replace(0, np.nan)
+        return self
+
     # --- Target ---
 
     def add_target(self, horizon=5, target_type="classification"):
@@ -181,6 +244,14 @@ class Indicators:
             .add_price_vs_sma(50)
             .add_zscore()
             .add_momentum()
+            .add_gap()
+            .add_pct_from_high(20)
+            .add_range_tightness(5)
+            .add_recovery_slope(5)
+            .add_sma50_vs_sma200()
+            .add_donchian(55)
+            .add_obv_zscore()
+            .add_atr_pct(14)
         )
         if vix_df is not None:
             self.add_vix(vix_df)

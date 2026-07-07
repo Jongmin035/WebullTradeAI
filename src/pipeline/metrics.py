@@ -80,3 +80,17 @@ def sharpe_ratio(returns, risk_free_rate=0.0, periods_per_year=252):
     if excess.std() == 0:
         return 0.0
     return np.sqrt(periods_per_year) * excess.mean() / excess.std()
+
+
+def sortino_ratio(returns, risk_free_rate=0.0, periods_per_year=252):
+    """
+    Annualized Sortino ratio — like Sharpe but penalises only downside volatility.
+    Rewards strategies that have asymmetric upside without assuming symmetric risk.
+    periods_per_year: 252 for daily, 52 for weekly.
+    """
+    returns = np.array(returns)
+    excess  = returns - risk_free_rate / periods_per_year
+    downside = excess[excess < 0]
+    if len(downside) == 0 or downside.std() == 0:
+        return 0.0
+    return np.sqrt(periods_per_year) * excess.mean() / downside.std()

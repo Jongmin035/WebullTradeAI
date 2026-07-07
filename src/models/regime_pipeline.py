@@ -37,7 +37,17 @@ FEATURES = [
     "close_vs_sma20", "close_vs_sma50",
     "zscore20",
     "momentum",
+    "vix",
+    "gap",
+    "sma50_vs_sma200",
+    "donchian_55_pos",
+    "atr14_pct",
+    "obv_zscore",
+    "pct_from_high_20d",
+    "range_tightness",
+    "recovery_slope",
     "rsi_rank", "volume_rank", "momentum_rank", "zscore20_rank", "volatility10_rank",
+    "pct_from_high_20d_rank", "recovery_slope_rank",
     "sentiment_1d", "sentiment_3d", "sentiment_7d",
 ]
 

@@ -31,10 +31,13 @@ VERSION = os.environ.get("GIT_SHA", "dev")
 
 SEQ_LEN          = 20   # days of history needed per LSTM sequence
 FEATURE_BUFFER   = 250  # extra history days to load so indicators warm up correctly
-RANK_FEATURES    = ["rsi_rank", "volume_rank", "momentum_rank", "zscore20_rank", "volatility10_rank"]
+RANK_FEATURES    = ["rsi_rank", "volume_rank", "momentum_rank", "zscore20_rank", "volatility10_rank",
+                    "pct_from_high_20d_rank", "recovery_slope_rank"]
 RANK_SOURCE_COLS = {"rsi_rank": "rsi", "volume_rank": "volume",
                     "momentum_rank": "momentum", "zscore20_rank": "zscore20",
-                    "volatility10_rank": "volatility10"}
+                    "volatility10_rank": "volatility10",
+                    "pct_from_high_20d_rank": "pct_from_high_20d",
+                    "recovery_slope_rank": "recovery_slope"}
 
 
 # --- Data helpers ---
@@ -97,6 +100,29 @@ def _compute_features_for_new_rows(sym, hist_df, new_rows_df):
         (feat_df["close"].rolling(20).std() + 1e-9)
     )
     feat_df["momentum"]        = feat_df["close"].pct_change(20)
+
+    # New features (added alongside 5-day label retrain)
+    feat_df["gap"]             = (feat_df["open"] - feat_df["close"].shift(1)) / feat_df["close"].shift(1).replace(0, np.nan)
+    feat_df["recovery_slope"]  = feat_df["close"].pct_change(5)
+    _rolling_high_20           = feat_df["close"].rolling(20).max()
+    feat_df["pct_from_high_20d"] = (_rolling_high_20 - feat_df["close"]) / _rolling_high_20.replace(0, np.nan)
+    feat_df["range_tightness"] = (feat_df["close"].rolling(5).max() - feat_df["close"].rolling(5).min()) / feat_df["close"].replace(0, np.nan)
+    _sma200                    = feat_df["close"].rolling(200).mean()
+    feat_df["sma50_vs_sma200"] = ((feat_df["sma50"] - _sma200) / _sma200.replace(0, np.nan)).fillna(0.0)
+    _don_high                  = feat_df["close"].rolling(55).max()
+    _don_low                   = feat_df["close"].rolling(55).min()
+    feat_df["donchian_55_pos"] = (feat_df["close"] - _don_low) / (_don_high - _don_low).replace(0, np.nan)
+    _price_chg                 = feat_df["close"].diff()
+    _direction                 = np.where(_price_chg > 0, 1, np.where(_price_chg < 0, -1, 0))
+    _obv                       = (feat_df["volume"] * _direction).cumsum()
+    _obv_std                   = _obv.rolling(20).std().replace(0, np.nan)
+    feat_df["obv_zscore"]      = (_obv - _obv.rolling(20).mean()) / _obv_std
+    _tr                        = pd.concat([
+        feat_df["high"] - feat_df["low"],
+        (feat_df["high"] - feat_df["close"].shift(1)).abs(),
+        (feat_df["low"]  - feat_df["close"].shift(1)).abs(),
+    ], axis=1).max(axis=1)
+    feat_df["atr14_pct"]       = _tr.rolling(14).mean() / feat_df["close"].replace(0, np.nan)
 
     # Keep only new rows
     cutoff  = new_rows_df["date"].min()
@@ -259,6 +285,11 @@ def load_latest_features(symbols, window_days=None):
             combined = pd.concat([combined, new_all], ignore_index=True)
 
     combined = combined.sort_values(["symbol", "date"]).reset_index(drop=True)
+
+    # VIX is market-wide and stored in parquets; today's new row may be missing it.
+    # Forward-fill per symbol so the most recent day uses yesterday's VIX.
+    if "vix" in combined.columns:
+        combined["vix"] = combined.groupby("symbol")["vix"].ffill()
 
     # Always recompute rank features on the full combined so old and new rows
     # are consistent. Rank features are cross-sectional and not stored in parquets.

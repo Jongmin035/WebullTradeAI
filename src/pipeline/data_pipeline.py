@@ -33,7 +33,8 @@ for _d in (_src, os.path.join(_src, "pipeline")):
 INDICATORS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "indicators")
 START_YEAR     = 2005
 END_YEAR       = pd.Timestamp.today().year
-RANK_FEATURES  = ["rsi", "volume", "momentum", "zscore20", "volatility10"]
+RANK_FEATURES  = ["rsi", "volume", "momentum", "zscore20", "volatility10",
+                  "pct_from_high_20d", "recovery_slope"]
 
 FEATURES = [
     "close", "volume",
@@ -47,7 +48,17 @@ FEATURES = [
     "zscore20",
     "momentum",
     "vix",
+    "gap",
+    "sma50_vs_sma200",
+    "donchian_55_pos",
+    "atr14_pct",
+    "obv_zscore",
+    "pct_from_high_20d",
+    "range_tightness",
+    "recovery_slope",
     "rsi_rank", "volume_rank", "momentum_rank", "zscore20_rank", "volatility10_rank",
+    "pct_from_high_20d_rank", "recovery_slope_rank",
+    "sentiment_1d", "sentiment_3d", "sentiment_7d",
 ]
 
 

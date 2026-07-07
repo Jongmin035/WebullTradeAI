@@ -9,7 +9,7 @@ for _d in (_src, os.path.join(_src, "pipeline")):
     if _d not in sys.path:
         sys.path.insert(0, _d)
 
-from metrics import sharpe_ratio, kelly_fraction
+from metrics import sharpe_ratio, sortino_ratio, kelly_fraction
 
 
 def run_backtest(predictions_df, half_kelly=True, rebalance_threshold=0.02,
@@ -113,6 +113,7 @@ def run_backtest(predictions_df, half_kelly=True, rebalance_threshold=0.02,
     returns         = results_df["return"].values
     cum_return      = (1 + pd.Series(returns)).prod() - 1
     sharpe          = sharpe_ratio(returns, periods_per_year=252)
+    sortino         = sortino_ratio(returns, periods_per_year=252)
     win_rate        = np.mean(returns > 0)
     n_days_invested = int((results_df["n_stocks"] > 0).sum())
 
@@ -121,6 +122,7 @@ def run_backtest(predictions_df, half_kelly=True, rebalance_threshold=0.02,
     print(f"Win rate         : {win_rate:.2%}")
     print(f"Cumulative return: {cum_return:.2%}")
     print(f"Sharpe ratio     : {sharpe:.4f}")
+    print(f"Sortino ratio    : {sortino:.4f}")
 
     if plot:
         equity_curve = (1 + pd.Series(returns)).cumprod()
@@ -138,6 +140,7 @@ def run_backtest(predictions_df, half_kelly=True, rebalance_threshold=0.02,
     return {
         "cumulative_return": cum_return,
         "sharpe": sharpe,
+        "sortino": sortino,
         "win_rate": win_rate,
         "n_days_invested": n_days_invested,
         "results_df": results_df,
