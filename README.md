@@ -32,22 +32,24 @@ EC2 auto-shutdown                    ↓ execute rebalancing orders (Webull API)
 
 The core model is a dual-head LSTM trained on 20 years of S&P 500 daily OHLCV data (2006–present).
 
-- **Input**: sequences of 20 trading days × 27 features per symbol
+- **Input**: sequences of 20 trading days × 38 features per symbol
 - **Architecture**: 2-layer LSTM → hidden size 32 → dropout → linear output head
-- **Classifier head** (`clf_prob`): probability the stock outperforms the median S&P 500 stock tomorrow (binary cross-entropy loss)
-- **Regressor head** (`reg_pred`): expected next-day return as a z-score (MSE loss)
+- **Classifier head** (`clf_prob`): probability the stock outperforms the median S&P 500 stock over the next 5 days (binary cross-entropy loss)
+- **Regressor head** (`reg_pred`): expected 5-day forward return as a z-score (MSE loss)
 - **Device**: NVIDIA A10G GPU (g5.xlarge) — training takes ~1–3 hours for 500 symbols
 
-### Features (27 per timestep)
+### Features (38 per timestep)
 
 | Category | Features |
 |---|---|
 | Price/Volume | `close`, `volume` |
-| Trend | `sma20`, `sma50`, `close_vs_sma20`, `close_vs_sma50` |
-| Momentum | `return_lag1/2/3`, `momentum`, `zscore20` |
+| Trend | `sma20`, `sma50`, `close_vs_sma20`, `close_vs_sma50`, `sma50_vs_sma200` |
+| Momentum | `return_lag1/2/3`, `recovery_slope` (5d), `momentum` (12-1 mo), `zscore20` |
 | Oscillators | `rsi`, `macd`, `signal`, `histogram` |
-| Volatility | `volatility10`, `price_range` |
-| Cross-sectional ranks | `rsi_rank`, `volume_rank`, `momentum_rank`, `zscore20_rank`, `volatility10_rank` |
+| Volatility | `volatility10`, `price_range`, `atr14_pct` |
+| Fear index | `vix` |
+| Entry/reversal signals | `gap`, `pct_from_high_20d`, `range_tightness`, `donchian_55_pos`, `obv_zscore` |
+| Cross-sectional ranks | `rsi_rank`, `volume_rank`, `momentum_rank`, `zscore20_rank`, `volatility10_rank`, `pct_from_high_20d_rank`, `recovery_slope_rank` |
 | Sentiment | `sentiment_1d`, `sentiment_3d`, `sentiment_7d` |
 
 Cross-sectional rank features normalize each indicator relative to all 500 stocks on the same day, helping the LSTM learn relative strength rather than absolute levels.
