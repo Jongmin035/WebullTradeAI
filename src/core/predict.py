@@ -401,7 +401,17 @@ def get_today_regime_vix():
             vix = 20.0
 
     except Exception as e:
+        import traceback, boto3, os
         log.warning(f"Regime detection failed ({e}) — defaulting to sideways/VIX 20")
+        try:
+            boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1")).put_object(
+                Bucket=os.getenv("AWS_S3_BUCKET", "webull-trade-ai"),
+                Key=f"diagnostics/{pd.Timestamp.today().strftime('%Y-%m-%d')}-regime-error.txt",
+                Body=traceback.format_exc(),
+                ContentType="text/plain",
+            )
+        except Exception:
+            pass
         regime, vix = "sideways", 20.0
 
     log.info(f"Today's regime: {regime}  VIX: {vix:.1f}")
