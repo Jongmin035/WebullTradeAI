@@ -427,7 +427,7 @@ def get_today_regime_vix():
                 progress=False,
                 auto_adjust=True,
             )
-            vix = float(vix_df["Close"].iloc[-1]) if not vix_df.empty else 20.0
+            vix = float(vix_df["Close"].squeeze().iloc[-1]) if not vix_df.empty else 20.0
         except Exception:
             vix = 20.0
 
