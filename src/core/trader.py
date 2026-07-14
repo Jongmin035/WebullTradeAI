@@ -53,7 +53,7 @@ MAX_CAPITAL            = None  # None = full account control
 CLF_PROB_THRESHOLD     = 0.52  # minimum model confidence (kelly gate at >0.50; 0.52 gives slight extra margin)
 MIN_POSITION_WEIGHT    = 0.03  # drop positions that would be < 3% of portfolio
 MAX_VENTURE_POSITIONS  = 10    # buy/target top-N venture stocks by Kelly score
-HOLD_ZONE_MAX_RANK     = 30    # keep held positions ranked up to this (reduces churn)
+HOLD_ZONE_MAX_RANK     = 15    # keep held positions ranked up to this (reduces churn)
 
 SAFETY_ETFS = ["SPY"]           # filler in bull/sideways — neutral drag, better than defensive ETFs
 HEDGE_ETFS  = ["SH", "SQQQ"]   # short exposure in bear regime only
