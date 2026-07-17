@@ -36,9 +36,10 @@ log = logging.getLogger(__name__)
 
 _STATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "state")
 
-STATS_FILE           = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "dashboard", "stats.json")
-BALANCE_HISTORY_FILE = os.path.join(_STATE_DIR, "balance_history.csv")
-TRADE_LOG_FILE       = os.path.join(_STATE_DIR, "trade_log.csv")
+STATS_FILE            = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "dashboard", "stats.json")
+PERF_STATS_FILE       = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "dashboard", "performance_stats.json")
+BALANCE_HISTORY_FILE  = os.path.join(_STATE_DIR, "balance_history.csv")
+TRADE_LOG_FILE        = os.path.join(_STATE_DIR, "trade_log.csv")
 
 _BALANCE_HEADERS = ["date", "cash_balance", "market_value", "total_balance"]
 _TRADE_HEADERS   = ["timestamp", "date", "symbol", "side", "quantity", "price", "value"]
@@ -68,6 +69,68 @@ def _load_commands():
     return {"max_capital": None, "manual_symbols": [], "force_sell": []}
 
 
+def _compute_performance_stats(stats):
+    """Compute live performance metrics from stats history for the dashboard."""
+    import math
+    history = [h for h in stats.get("history", []) if not h.get("error") and h.get("effective_portfolio_value")]
+    initial = stats.get("initial_capital")
+    if len(history) < 2 or not initial:
+        return None
+
+    current    = history[-1]["effective_portfolio_value"]
+    today_str  = history[-1]["date"]
+    days_live  = len(history)
+
+    daily_returns = [
+        (history[i]["effective_portfolio_value"] - history[i-1]["effective_portfolio_value"])
+        / history[i-1]["effective_portfolio_value"]
+        for i in range(1, len(history))
+        if history[i-1]["effective_portfolio_value"]
+    ]
+
+    cumulative_return = (current - initial) / initial
+    daily_return      = daily_returns[-1] if daily_returns else 0.0
+
+    monthly_start = history[max(0, len(history) - 21)]["effective_portfolio_value"]
+    monthly_return = (current - monthly_start) / monthly_start if monthly_start else 0.0
+
+    annual_return = (1 + cumulative_return) ** (252 / days_live) - 1 if days_live else 0.0
+
+    if len(daily_returns) > 1:
+        mean_r = sum(daily_returns) / len(daily_returns)
+        std_r  = (sum((r - mean_r) ** 2 for r in daily_returns) / (len(daily_returns) - 1)) ** 0.5
+        sharpe = mean_r / std_r * math.sqrt(252) if std_r else 0.0
+    else:
+        sharpe = 0.0
+
+    win_rate = sum(1 for r in daily_returns if r > 0) / len(daily_returns) if daily_returns else 0.0
+
+    peak, max_dd = initial, 0.0
+    for h in history:
+        val  = h["effective_portfolio_value"]
+        peak = max(peak, val)
+        max_dd = max(max_dd, (peak - val) / peak if peak else 0.0)
+
+    spy_series  = stats.get("index_history", {}).get("SPY", [])
+    spy_return  = spy_series[-1]["pct"] / 100 if spy_series else 0.0
+
+    return {
+        "as_of":                  today_str,
+        "days_live":              days_live,
+        "initial_capital":        round(initial, 2),
+        "current_value":          round(current, 2),
+        "daily_return":           round(daily_return, 6),
+        "monthly_return":         round(monthly_return, 6),
+        "annual_return":          round(annual_return, 6),
+        "cumulative_return":      round(cumulative_return, 6),
+        "sharpe_ratio":           round(sharpe, 4),
+        "win_rate":               round(win_rate, 4),
+        "max_drawdown":           round(max_dd, 6),
+        "spy_return_same_period": round(spy_return, 6),
+        "excess_return":          round(cumulative_return - spy_return, 6),
+    }
+
+
 def _generate_history_html():
     """Regenerate history.html from the latest CSVs. Silently skips if history.py is unavailable."""
     try:
@@ -86,6 +149,10 @@ def _save_stats(stats):
     stats["controls"] = _load_commands()   # embed current control state for dashboard
     with open(STATS_FILE, "w") as f:
         json.dump(stats, f, indent=2, default=str)
+    perf = _compute_performance_stats(stats)
+    if perf:
+        with open(PERF_STATS_FILE, "w") as f:
+            json.dump(perf, f, indent=2)
     _generate_history_html()
     _upload_to_s3()
 
@@ -101,7 +168,7 @@ def _upload_to_s3():
 
         # Dashboard files (public-facing)
         dashboard_dir = os.path.dirname(STATS_FILE)
-        for filename in ["stats.json", "index.html", "history.html"]:
+        for filename in ["stats.json", "performance_stats.json", "index.html", "history.html"]:
             local_path = os.path.join(dashboard_dir, filename)
             if not os.path.exists(local_path):
                 continue
