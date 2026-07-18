@@ -78,6 +78,17 @@ class RetrainLog:
     def begin_step(self, name):
         self._t       = time.time()
         self._current = name
+        try:
+            import boto3
+            bucket = os.getenv("AWS_S3_BUCKET", "webull-trade-ai")
+            boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1")).put_object(
+                Bucket=bucket,
+                Key=f"diagnostics/{datetime.utcnow().strftime('%Y-%m-%d')}-retrain-{name}.txt",
+                Body=f"step={name} started_at={datetime.utcnow().isoformat()}Z",
+                ContentType="text/plain",
+            )
+        except Exception:
+            pass
 
     def end_step(self, **metrics):
         self.data["steps"].append({
