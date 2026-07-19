@@ -6,6 +6,8 @@ Description=Run WebullTradeAI weekly model retrain every Sunday night
 # Retrain takes ~3-4 hrs on g5.xlarge — done well before Sunday
 OnCalendar=Sat 12:00:00 UTC
 AccuracySec=60
+# Fire immediately if EC2 booted after the scheduled time (e.g. EventBridge delay).
+Persistent=true
 
 [Install]
 WantedBy=timers.target
