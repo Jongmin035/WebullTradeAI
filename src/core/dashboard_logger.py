@@ -77,24 +77,36 @@ def _compute_performance_stats(stats):
     if len(history) < 2 or not initial:
         return None
 
-    current    = history[-1]["effective_portfolio_value"]
-    today_str  = history[-1]["date"]
-    days_live  = len(history)
+    current   = history[-1]["effective_portfolio_value"]
+    today_str = history[-1]["date"]
+    days_live = len(history)
 
-    daily_returns = [
-        (history[i]["effective_portfolio_value"] - history[i-1]["effective_portfolio_value"])
-        / history[i-1]["effective_portfolio_value"]
-        for i in range(1, len(history))
-        if history[i-1]["effective_portfolio_value"]
-    ]
+    # Time-weighted daily returns: subtract any deposit from the day's balance change
+    # so that cash injections don't inflate performance metrics.
+    daily_returns = []
+    for i in range(1, len(history)):
+        prev_val = history[i-1]["effective_portfolio_value"]
+        if not prev_val:
+            continue
+        curr_val = history[i]["effective_portfolio_value"]
+        deposit  = history[i].get("deposit", 0) or 0
+        daily_returns.append((curr_val - prev_val - deposit) / prev_val)
 
-    cumulative_return = (current - initial) / initial
-    daily_return      = daily_returns[-1] if daily_returns else 0.0
+    # TWR cumulative return: chain-multiply deposit-adjusted daily returns
+    twr = 1.0
+    for r in daily_returns:
+        twr *= (1 + r)
+    cumulative_return = twr - 1.0
 
-    monthly_start = history[max(0, len(history) - 21)]["effective_portfolio_value"]
-    monthly_return = (current - monthly_start) / monthly_start if monthly_start else 0.0
+    daily_return  = daily_returns[-1] if daily_returns else 0.0
 
-    annual_return = (1 + cumulative_return) ** (252 / days_live) - 1 if days_live else 0.0
+    monthly_returns = daily_returns[max(0, len(daily_returns) - 21):]
+    monthly_return  = 1.0
+    for r in monthly_returns:
+        monthly_return *= (1 + r)
+    monthly_return -= 1.0
+
+    annual_return = twr ** (252 / days_live) - 1 if days_live else 0.0
 
     if len(daily_returns) > 1:
         mean_r = sum(daily_returns) / len(daily_returns)
@@ -105,14 +117,15 @@ def _compute_performance_stats(stats):
 
     win_rate = sum(1 for r in daily_returns if r > 0) / len(daily_returns) if daily_returns else 0.0
 
-    peak, max_dd = initial, 0.0
-    for h in history:
-        val  = h["effective_portfolio_value"]
-        peak = max(peak, val)
-        max_dd = max(max_dd, (peak - val) / peak if peak else 0.0)
+    # Max drawdown on TWR equity curve (deposit-excluded)
+    twr_curve, peak, max_dd = 1.0, 1.0, 0.0
+    for r in daily_returns:
+        twr_curve *= (1 + r)
+        peak   = max(peak, twr_curve)
+        max_dd = max(max_dd, (peak - twr_curve) / peak)
 
-    spy_series  = stats.get("index_history", {}).get("SPY", [])
-    spy_return  = spy_series[-1]["pct"] / 100 if spy_series else 0.0
+    spy_series = stats.get("index_history", {}).get("SPY", [])
+    spy_return = spy_series[-1]["pct"] / 100 if spy_series else 0.0
 
     return {
         "as_of":                  today_str,
@@ -363,21 +376,29 @@ def log_rebalance(account, effective_pv, bot_positions, manual_positions, trades
 
     # Today's change vs previous session
     today_change_pct = None
+    deposit = 0.0
     prev = next((h for h in reversed(stats["history"]) if not h.get("error")), None)
     if prev:
         prev_value = prev["effective_portfolio_value"]
         if prev_value:
-            today_change_pct = round((effective_pv - prev_value) / prev_value * 100, 4)
+            change_pct = (effective_pv - prev_value) / prev_value
+            # A single-day gain > 5% almost certainly means a cash deposit, not market returns.
+            if change_pct > 0.05:
+                deposit = effective_pv - prev_value
+                log.info(f"Deposit detected: ${deposit:,.2f} — flagged in history entry.")
+            today_change_pct = round((effective_pv - prev_value - deposit) / prev_value * 100, 4)
 
     # Bot-specific computed stats
     bot_market_value = round(sum(d["market_value"] for d in bot_positions.values()), 2)
     bot_cash         = round(max(effective_pv - bot_market_value, 0), 2)
 
     # Derive P&L from portfolio value history — reliable regardless of API field names.
-    # Open P&L = total gain/loss since bot started.
-    # Day P&L  = change vs previous session.
-    bot_open_pnl = round(effective_pv - initial, 2) if initial else 0.0
-    bot_day_pnl  = round(effective_pv - prev["effective_portfolio_value"], 2) \
+    # Open P&L = total gain/loss since bot started, excluding external deposits.
+    # Day P&L  = change vs previous session, excluding any deposit on that day.
+    total_deposits = stats.get("total_deposits", 0.0) + deposit
+    stats["total_deposits"] = total_deposits
+    bot_open_pnl = round(effective_pv - initial - total_deposits, 2) if initial else 0.0
+    bot_day_pnl  = round(effective_pv - prev["effective_portfolio_value"] - deposit, 2) \
                    if prev and prev.get("effective_portfolio_value") else 0.0
 
     entry = {
@@ -392,6 +413,7 @@ def log_rebalance(account, effective_pv, bot_positions, manual_positions, trades
         "bot_day_pnl":               bot_day_pnl,
         "cumulative_return_pct":     cumulative_return_pct,
         "today_change_pct":          today_change_pct,
+        "deposit":                   round(deposit, 2) if deposit else 0.0,
 
         # Full account from Webull (for reference)
         "net_account_value": round(account.get("net_account_value", effective_pv), 2),
