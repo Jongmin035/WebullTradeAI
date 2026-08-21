@@ -372,7 +372,13 @@ def log_rebalance(account, effective_pv, bot_positions, manual_positions, trades
         stats["initial_capital"] = effective_pv
 
     initial = stats["initial_capital"]
-    cumulative_return_pct = round((effective_pv - initial) / initial * 100, 4) if initial else 0
+    # TWR cumulative return: chain-multiply from previous entry's TWR, excluding deposits.
+    prev_twr = (prev.get("cumulative_return_pct", 0) / 100) if prev and not prev.get("error") else 0.0
+    if prev and prev.get("effective_portfolio_value"):
+        day_ret = (effective_pv - prev["effective_portfolio_value"] - deposit) / prev["effective_portfolio_value"]
+        cumulative_return_pct = round(((1 + prev_twr) * (1 + day_ret) - 1) * 100, 4)
+    else:
+        cumulative_return_pct = 0.0
 
     # Today's change vs previous session
     today_change_pct = None
