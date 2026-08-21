@@ -156,6 +156,13 @@
       <div style="display:flex;align-items:center;gap:6px">
         <button class="chart-btn active" id="mode-dollar">$ Value</button>
         <button class="chart-btn" id="mode-pct">% Return</button>
+        <span style="color:#4a5568;margin:0 2px">|</span>
+        <button class="chart-btn" id="range-1w">1W</button>
+        <button class="chart-btn" id="range-1m">1M</button>
+        <button class="chart-btn" id="range-3m">3M</button>
+        <button class="chart-btn" id="range-6m">6M</button>
+        <button class="chart-btn" id="range-1y">1Y</button>
+        <button class="chart-btn active" id="range-all">All</button>
       </div>
     </div>
     <div id="index-selectors" style="display:none;gap:6px;margin-bottom:14px">
@@ -214,7 +221,20 @@
   let chart = null;
   let lastStats = null;
   let chartMode = "dollar";   // "dollar" | "pct"
+  let selectedRange = "all";  // "1w" | "1m" | "3m" | "6m" | "1y" | "all"
   let selectedIndexes = new Set();
+
+  function applyRange(history) {
+    if (selectedRange === "all" || history.length === 0) return history;
+    const days = { "1w": 7, "1m": 30, "3m": 91, "6m": 182, "1y": 365 }[selectedRange];
+    if (!days) return history;
+    const last  = new Date(history[history.length - 1].date);
+    const cutoff = new Date(last);
+    cutoff.setDate(cutoff.getDate() - days);
+    const cutoffStr = cutoff.toISOString().slice(0, 10);
+    const filtered = history.filter(h => h.date >= cutoffStr);
+    return filtered.length > 0 ? filtered : history;
+  }
 
   const INDEX_CONFIG = {
     SPY: { label: "S&P 500",   color: "#3498db" },
@@ -350,16 +370,17 @@
 
   function renderChart() {
     if (!lastStats) return;
-    const stats      = lastStats;
-    const isError    = stats.status === "error";
-    const isWarning  = stats.status === "warning";
-    const validHistory = (stats.history || []).filter(h => !h.error);
-    const labels     = validHistory.map(h => h.date);
-    const initial    = stats.initial_capital;
-    const botColor   = isError ? "#e74c3c" : isWarning ? "#f39c12" : "#2ecc71";
-    const botBg      = isError ? "rgba(231,76,60,0.08)" : isWarning ? "rgba(243,156,18,0.08)" : "rgba(46,204,113,0.08)";
-    const noPts      = labels.length > 60;
-    const datasets   = [];
+    const stats        = lastStats;
+    const isError      = stats.status === "error";
+    const isWarning    = stats.status === "warning";
+    const allHistory   = (stats.history || []).filter(h => !h.error);
+    const validHistory = applyRange(allHistory);
+    const labels       = validHistory.map(h => h.date);
+    const initial      = stats.initial_capital;
+    const botColor     = isError ? "#e74c3c" : isWarning ? "#f39c12" : "#2ecc71";
+    const botBg        = isError ? "rgba(231,76,60,0.08)" : isWarning ? "rgba(243,156,18,0.08)" : "rgba(46,204,113,0.08)";
+    const noPts        = labels.length > 60;
+    const datasets     = [];
 
     if (chartMode === "dollar") {
       const values = validHistory.map(h => h.effective_portfolio_value);
@@ -368,12 +389,17 @@
         borderColor: botColor, backgroundColor: botBg,
         borderWidth: 2, pointRadius: noPts ? 0 : 3, tension: 0.3, fill: true,
       });
-      if (initial != null) datasets.push({
+      // Only show initial capital line in full-range view (it's misleading at sub-ranges)
+      if (initial != null && selectedRange === "all") datasets.push({
         label: "Initial Capital ($)", data: labels.map(() => initial),
         borderColor: "#4a5568", borderWidth: 1, borderDash: [6, 4], pointRadius: 0, fill: false,
       });
     } else {
-      const pcts = validHistory.map(h => h.cumulative_return_pct ?? null);
+      // Re-base % returns to 0 at the start of the selected range for a fair comparison
+      const baseBot = validHistory[0]?.cumulative_return_pct ?? 0;
+      const pcts = validHistory.map(h =>
+        h.cumulative_return_pct != null ? h.cumulative_return_pct - baseBot : null
+      );
       datasets.push({
         label: "Bot Return (%)", data: pcts,
         borderColor: botColor, backgroundColor: botBg,
@@ -383,10 +409,13 @@
         label: "0%", data: labels.map(() => 0),
         borderColor: "#4a5568", borderWidth: 1, borderDash: [6, 4], pointRadius: 0, fill: false,
       });
+      const startDate    = validHistory[0]?.date ?? "";
       const indexHistory = stats.index_history || {};
       for (const ticker of selectedIndexes) {
-        const cfg  = INDEX_CONFIG[ticker];
-        const map  = Object.fromEntries((indexHistory[ticker] || []).map(d => [d.date, d.pct]));
+        const cfg      = INDEX_CONFIG[ticker];
+        const series   = (indexHistory[ticker] || []).filter(d => d.date >= startDate);
+        const baseIdx  = series[0]?.pct ?? 0;
+        const map      = Object.fromEntries(series.map(d => [d.date, d.pct - baseIdx]));
         datasets.push({
           label: cfg.label, data: labels.map(d => map[d] ?? null),
           borderColor: cfg.color, borderWidth: 1.5,
@@ -446,6 +475,17 @@
     document.getElementById("mode-dollar").classList.remove("active");
     document.getElementById("index-selectors").style.display = "flex";
     renderChart();
+  });
+
+  // Time range buttons
+  const RANGE_IDS = ["range-1w", "range-1m", "range-3m", "range-6m", "range-1y", "range-all"];
+  RANGE_IDS.forEach(id => {
+    document.getElementById(id).addEventListener("click", () => {
+      selectedRange = id.replace("range-", "");
+      RANGE_IDS.forEach(r => document.getElementById(r).classList.remove("active"));
+      document.getElementById(id).classList.add("active");
+      renderChart();
+    });
   });
 
   // Index selector buttons
