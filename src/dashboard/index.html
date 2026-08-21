@@ -161,6 +161,7 @@
       </div>
       <div style="display:flex;align-items:center;gap:6px">
         <button class="chart-btn" id="range-1w">1W</button>
+        <button class="chart-btn" id="range-2w">2W</button>
         <button class="chart-btn" id="range-1m">1M</button>
         <button class="chart-btn" id="range-3m">3M</button>
         <button class="chart-btn" id="range-6m">6M</button>
@@ -229,7 +230,7 @@
 
   function applyRange(history) {
     if (selectedRange === "all" || history.length === 0) return history;
-    const days = { "1w": 7, "1m": 30, "3m": 91, "6m": 182, "1y": 365 }[selectedRange];
+    const days = { "1w": 7, "2w": 14, "1m": 30, "3m": 91, "6m": 182, "1y": 365 }[selectedRange];
     if (!days) return history;
     const last  = new Date(history[history.length - 1].date);
     const cutoff = new Date(last);
@@ -481,7 +482,7 @@
   });
 
   // Time range buttons
-  const RANGE_IDS = ["range-1w", "range-1m", "range-3m", "range-6m", "range-1y", "range-all"];
+  const RANGE_IDS = ["range-1w", "range-2w", "range-1m", "range-3m", "range-6m", "range-1y", "range-all"];
   RANGE_IDS.forEach(id => {
     document.getElementById(id).addEventListener("click", () => {
       selectedRange = id.replace("range-", "");
