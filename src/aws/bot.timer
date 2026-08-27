@@ -6,6 +6,7 @@ After=config-pull.service
 # 11:00 AM ET = 8:00 AM PT = 15:00 UTC
 OnCalendar=Mon..Fri 15:00:00 UTC
 AccuracySec=60
+Persistent=true
 
 [Install]
 WantedBy=timers.target
