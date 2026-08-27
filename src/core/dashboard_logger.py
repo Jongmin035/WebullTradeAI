@@ -372,15 +372,8 @@ def log_rebalance(account, effective_pv, bot_positions, manual_positions, trades
         stats["initial_capital"] = effective_pv
 
     initial = stats["initial_capital"]
-    # TWR cumulative return: chain-multiply from previous entry's TWR, excluding deposits.
-    prev_twr = (prev.get("cumulative_return_pct", 0) / 100) if prev and not prev.get("error") else 0.0
-    if prev and prev.get("effective_portfolio_value"):
-        day_ret = (effective_pv - prev["effective_portfolio_value"] - deposit) / prev["effective_portfolio_value"]
-        cumulative_return_pct = round(((1 + prev_twr) * (1 + day_ret) - 1) * 100, 4)
-    else:
-        cumulative_return_pct = 0.0
 
-    # Today's change vs previous session
+    # Today's change vs previous session (must come before TWR block — deposit is needed there)
     today_change_pct = None
     deposit = 0.0
     prev = next((h for h in reversed(stats["history"]) if not h.get("error")), None)
@@ -393,6 +386,14 @@ def log_rebalance(account, effective_pv, bot_positions, manual_positions, trades
                 deposit = effective_pv - prev_value
                 log.info(f"Deposit detected: ${deposit:,.2f} — flagged in history entry.")
             today_change_pct = round((effective_pv - prev_value - deposit) / prev_value * 100, 4)
+
+    # TWR cumulative return: chain-multiply from previous entry's TWR, excluding deposits.
+    prev_twr = (prev.get("cumulative_return_pct", 0) / 100) if prev and not prev.get("error") else 0.0
+    if prev and prev.get("effective_portfolio_value"):
+        day_ret = (effective_pv - prev["effective_portfolio_value"] - deposit) / prev["effective_portfolio_value"]
+        cumulative_return_pct = round(((1 + prev_twr) * (1 + day_ret) - 1) * 100, 4)
+    else:
+        cumulative_return_pct = 0.0
 
     # Bot-specific computed stats
     bot_market_value = round(sum(d["market_value"] for d in bot_positions.values()), 2)
