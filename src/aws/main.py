@@ -128,8 +128,8 @@ def main(dry_run=False):
             log.info("Market closed today — nothing to do.")
             return
 
-        # 1. Load symbol list
-        symbols = list(set(fetch_sp500_symbols()) | set(ETF_SYMBOLS))
+        # 1. Load symbol list — exclude hyphenated tickers (e.g. BF-B) which Webull rejects
+        symbols = [s for s in set(fetch_sp500_symbols()) | set(ETF_SYMBOLS) if "-" not in s]
         log.info(f"Universe: {len(symbols)} symbols ({len(ETF_SYMBOLS)} ETFs included)")
 
         # 2. Generate today's predictions using the current winning model
