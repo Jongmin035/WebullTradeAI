@@ -593,7 +593,12 @@ class Trader:
         post_bot_details    = {sym: d for sym, d in post_trade_details.items() if sym not in manual}
         post_manual_details = {sym: d for sym, d in post_trade_details.items() if sym in manual}
         actual_after        = set(post_bot_details.keys())
-        update_position_highs(current_prices, actual_after)
+        # Use post-trade prices (not the pre-trade current_prices) so positions
+        # bought for the first time today get their high-water mark seeded now,
+        # instead of being skipped (no price) and reset a day late at a possibly
+        # already-crashed price.
+        post_trade_prices   = {sym: d["price"] for sym, d in post_bot_details.items()}
+        update_position_highs(post_trade_prices, actual_after)
 
         # Log to dashboard — use post-trade positions so the dashboard reflects reality
         log_rebalance(account, effective_pv, post_bot_details, post_manual_details, executed_trades,
