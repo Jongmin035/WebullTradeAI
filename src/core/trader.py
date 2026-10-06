@@ -21,6 +21,7 @@ Environment variables (set in .env):
 
 import os
 import sys
+import json
 import uuid
 import logging
 import pandas as pd
@@ -56,9 +57,34 @@ MIN_POSITION_WEIGHT    = 0.03  # drop positions that would be < 3% of portfolio
 MAX_VENTURE_POSITIONS  = 10    # buy/target top-N venture stocks by Kelly score
 HOLD_ZONE_MAX_RANK     = 15    # keep held positions ranked up to this (reduces churn)
 MAX_SECTOR_WEIGHT      = 0.35  # cap any single GICS sector at this fraction of venture_pct
+CONVICTION_DROP_THRESHOLD = 0.15  # force a rebalance if a held symbol's clf_prob fell at
+                                   # least this much since yesterday, even within REBALANCE_THRESHOLD
 
 SAFETY_ETFS = ["SPY"]           # filler in bull/sideways — neutral drag, better than defensive ETFs
 HEDGE_ETFS  = ["SH", "SQQQ"]   # short exposure in bear regime only
+
+PREV_CLF_PROB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "state", "prev_clf_prob.json")
+
+
+def _load_prev_clf_prob():
+    """Load yesterday's {symbol: clf_prob} snapshot, used to detect conviction flips."""
+    if os.path.exists(PREV_CLF_PROB_FILE):
+        try:
+            with open(PREV_CLF_PROB_FILE) as f:
+                return json.load(f)
+        except Exception as e:
+            log.warning(f"Could not load prev_clf_prob.json ({e}) — treating as no prior data")
+    return {}
+
+
+def _save_prev_clf_prob(clf_probs):
+    """Save today's {symbol: clf_prob} snapshot for tomorrow's conviction-flip check."""
+    try:
+        os.makedirs(os.path.dirname(PREV_CLF_PROB_FILE), exist_ok=True)
+        with open(PREV_CLF_PROB_FILE, "w") as f:
+            json.dump(clf_probs, f)
+    except Exception as e:
+        log.warning(f"Could not save prev_clf_prob.json ({e})")
 
 UAT_ENDPOINT = "us-openapi-alb.uat.webullbroker.com"
 
@@ -581,6 +607,16 @@ class Trader:
         log.info(f"Bot holdings (current): {list(current_weights.keys())}")
         log.info(f"Bot holdings (target) : {list(target_weights.keys())}")
 
+        # --- Conviction-flip override: don't let the weight-delta threshold suppress a
+        # trade when the model's confidence in a held position has dropped sharply.
+        # (A flip below CLF_PROB_THRESHOLD already forces a full exit above, via
+        # target_w == 0.0 — this catches the narrower case where the symbol is still
+        # a valid candidate but materially weaker than yesterday.)
+        prev_clf_prob = _load_prev_clf_prob()
+        today_clf_prob = {
+            sym: float(p) for sym, p in zip(predictions_today["symbol"], predictions_today["clf_prob"])
+        }
+
         all_symbols = set(current_weights) | set(target_weights)
         sells, buys = [], []
 
@@ -595,8 +631,18 @@ class Trader:
                 sells.append((symbol, current_w * effective_pv))
                 continue
 
-            if abs(delta) <= REBALANCE_THRESHOLD:
+            conviction_flip = (
+                current_w > 0.0 and abs(delta) > 0.0
+                and symbol in prev_clf_prob and symbol in today_clf_prob
+                and (prev_clf_prob[symbol] - today_clf_prob[symbol]) >= CONVICTION_DROP_THRESHOLD
+            )
+            if abs(delta) <= REBALANCE_THRESHOLD and not conviction_flip:
                 continue  # within threshold, no trade needed
+            if conviction_flip and abs(delta) <= REBALANCE_THRESHOLD:
+                log.info(
+                    f"Conviction flip: {symbol} clf_prob {prev_clf_prob[symbol]:.2f} -> "
+                    f"{today_clf_prob[symbol]:.2f} — forcing rebalance despite small weight delta ({delta:+.1%})"
+                )
 
             dollar_delta = abs(delta) * effective_pv   # size trades against effective capital only
             if delta < 0:
@@ -656,6 +702,9 @@ class Trader:
         # already-crashed price.
         post_trade_prices   = {sym: d["price"] for sym, d in post_bot_details.items()}
         update_position_highs(post_trade_prices, actual_after)
+
+        # Save today's clf_prob snapshot for tomorrow's conviction-flip check.
+        _save_prev_clf_prob(today_clf_prob)
 
         # Log to dashboard — use post-trade positions so the dashboard reflects reality
         log_rebalance(account, effective_pv, post_bot_details, post_manual_details, executed_trades,

@@ -198,6 +198,7 @@ def _upload_to_s3():
             (os.path.join(_STATE_DIR, "commands.json"),             "state/commands.json",             "application/json"),
             (os.path.join(_STATE_DIR, "peak_portfolio_value.json"), "state/peak_portfolio_value.json", "application/json"),
             (os.path.join(_STATE_DIR, "position_highs.json"),       "state/position_highs.json",       "application/json"),
+            (os.path.join(_STATE_DIR, "prev_clf_prob.json"),        "state/prev_clf_prob.json",        "application/json"),
         ]
         for local_path, s3_key, content_type in state_files:
             if not os.path.exists(local_path):
@@ -235,6 +236,7 @@ def restore_state_from_s3():
             ("state/commands.json",          os.path.join(_STATE_DIR, "commands.json")),
             ("state/peak_portfolio_value.json", os.path.join(_STATE_DIR, "peak_portfolio_value.json")),
             ("state/position_highs.json",    os.path.join(_STATE_DIR, "position_highs.json")),
+            ("state/prev_clf_prob.json",     os.path.join(_STATE_DIR, "prev_clf_prob.json")),
             ("stats.json",                   STATS_FILE),
         ]
 
