@@ -72,19 +72,19 @@ def save_artifacts(model_name, artifacts):
     log.info(f"Saved {len(artifacts)} artifact(s) for '{model_name}' to {d}")
 
 
-def save_metadata(winner, sharpe_scores, trained_up_to, evaluation_months=12):
+def save_metadata(winner, sortino_scores, trained_up_to, evaluation_months=12):
     """Save metadata.json recording which model won and evaluation results."""
     os.makedirs(ARTIFACTS_DIR, exist_ok=True)
     meta = {
         "winner":             winner,
         "trained_up_to":      str(trained_up_to),
         "evaluation_months":  evaluation_months,
-        "sharpe_scores":      sharpe_scores,
+        "sortino_scores":     sortino_scores,
         "retrained_at":       datetime.now().isoformat(timespec="seconds"),
     }
     with open(METADATA_FILE, "w") as f:
         json.dump(meta, f, indent=2)
-    log.info(f"Metadata saved — winner: {winner}  sharpes: {sharpe_scores}")
+    log.info(f"Metadata saved — winner: {winner}  sortinos: {sortino_scores}")
     return meta
 
 

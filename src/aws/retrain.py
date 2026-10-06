@@ -594,7 +594,7 @@ if __name__ == "__main__":
         save_artifacts(winner, artifacts)
         save_metadata(
             winner            = winner,
-            sharpe_scores     = sortinos,
+            sortino_scores    = sortinos,
             trained_up_to     = clf_df["date"].max().date(),
             evaluation_months = EVAL_MONTHS,
         )
