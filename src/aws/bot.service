@@ -11,6 +11,12 @@ StartLimitAction=poweroff
 Type=oneshot
 User=root
 
+# Kill the container if it hangs (e.g. a stalled network call) — without this,
+# a hang never produces a failure, so ExecStopPost below never runs and the
+# EC2 instance never shuts down. Generous relative to the ~1-10 min normal
+# runtime (incl. both retry attempts) so it never cuts off legitimate work.
+TimeoutStartSec=20m
+
 # .env is mounted read-only so python-dotenv can parse it (handles quoted values
 # correctly, unlike Docker's --env-file which passes them literally)
 ExecStart=/usr/bin/docker run --rm \
@@ -32,8 +38,11 @@ SyslogIdentifier=webull-bot
 # 1. Log exit result to S3 for diagnostics (non-critical).
 ExecStopPost=/bin/bash -c 'export AWS_DEFAULT_REGION=us-east-1; D=$(date +%%Y-%%m-%%d); echo "result=$SERVICE_RESULT exit=$EXIT_CODE at $(date -u)" | aws s3 cp - "s3://webull-trade-ai/diagnostics/$D-bot-exit.txt" 2>/dev/null || true'
 
-# 2. Shut down on weekdays. On weekends (Sat=6, Sun=7) skip — retrain may still be running.
-ExecStopPost=/bin/bash -c 'day=$(date +%%u); [ "$day" -ge 6 ] && exit 0; /sbin/shutdown -h now'
+# 2. Shut down — unless retrain.service is actively running right now (so an
+# off-schedule/manual bot.service run on a Saturday doesn't kill a live retrain).
+# Checks actual retrain state, not day-of-week, so any other unexpected firing
+# still shuts the instance down instead of leaving it running indefinitely.
+ExecStopPost=/bin/bash -c 'systemctl is-active --quiet retrain.service && exit 0; /sbin/shutdown -h now'
 
 [Install]
 WantedBy=multi-user.target

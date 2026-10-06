@@ -6,6 +6,11 @@ Before=bot.timer retrain.timer
 
 [Service]
 Type=oneshot
+# Kill startup.sh if it hangs (e.g. a stalled docker pull or AWS CLI call).
+# bot.timer/retrain.timer are ordered After= this unit's completion (not
+# gated on its success), so bounding it here lets them still get armed and
+# eventually self-shutdown even if this run fails or hangs.
+TimeoutStartSec=15m
 ExecStart=/home/ec2-user/WebullTradeAI/src/aws/startup.sh
 RemainAfterExit=yes
 StandardOutput=journal

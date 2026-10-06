@@ -200,6 +200,8 @@ def main(dry_run=False):
             log_error(msg)
         except Exception as e2:
             _write_diag(f"log-error-failed-{type(e2).__name__}")
+        sys.exit(1)  # non-zero exit — bot.service's ExecStopPost shuts down either way,
+                     # but this keeps Restart=on-failure and diagnostic exit codes honest
 
 
 if __name__ == "__main__":
