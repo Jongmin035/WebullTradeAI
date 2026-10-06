@@ -14,10 +14,11 @@ echo "config-pull: startup.sh started at $(date -u)" | \
 
 echo "config-pull: pulling service files from s3://$BUCKET/config/"
 
-aws s3 cp "s3://$BUCKET/config/bot.service"     /etc/systemd/system/bot.service
-aws s3 cp "s3://$BUCKET/config/retrain.service" /etc/systemd/system/retrain.service
-aws s3 cp "s3://$BUCKET/config/bot.timer"       /etc/systemd/system/bot.timer       || true
-aws s3 cp "s3://$BUCKET/config/retrain.timer"   /etc/systemd/system/retrain.timer   || true
+aws s3 cp "s3://$BUCKET/config/bot.service"          /etc/systemd/system/bot.service
+aws s3 cp "s3://$BUCKET/config/retrain.service"      /etc/systemd/system/retrain.service
+aws s3 cp "s3://$BUCKET/config/bot.timer"            /etc/systemd/system/bot.timer            || true
+aws s3 cp "s3://$BUCKET/config/retrain.timer"        /etc/systemd/system/retrain.timer        || true
+aws s3 cp "s3://$BUCKET/config/config-pull.service"  /etc/systemd/system/config-pull.service  || true
 
 systemctl daemon-reload
 
