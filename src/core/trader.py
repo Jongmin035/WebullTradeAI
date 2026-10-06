@@ -57,8 +57,9 @@ MIN_POSITION_WEIGHT    = 0.03  # drop positions that would be < 3% of portfolio
 MAX_VENTURE_POSITIONS  = 10    # buy/target top-N venture stocks by Kelly score
 HOLD_ZONE_MAX_RANK     = 15    # keep held positions ranked up to this (reduces churn)
 MAX_SECTOR_WEIGHT      = 0.35  # cap any single GICS sector at this fraction of venture_pct
-CONVICTION_DROP_THRESHOLD = 0.15  # force a rebalance if a held symbol's clf_prob fell at
-                                   # least this much since yesterday, even within REBALANCE_THRESHOLD
+CONVICTION_SHIFT_THRESHOLD = 0.15  # force a rebalance if a held symbol's clf_prob moved at
+                                    # least this much (either direction) since yesterday,
+                                    # even within REBALANCE_THRESHOLD
 
 SAFETY_ETFS = ["SPY"]           # filler in bull/sideways — neutral drag, better than defensive ETFs
 HEDGE_ETFS  = ["SH", "SQQQ"]   # short exposure in bear regime only
@@ -198,7 +199,11 @@ class Trader:
                 "and WEBULL_ACCOUNT_ID in your .env file."
             )
 
-        self.client = ApiClient(app_key, app_secret, region)
+        # Explicit timeouts — the SDK defaults to None (no timeout), which means any
+        # stalled connection hangs the process forever. A hang here never raises, so
+        # main.py's retry/exception handling never runs and the EC2 instance never
+        # shuts down. Bounding it turns a silent hang into a real, catchable error.
+        self.client = ApiClient(app_key, app_secret, region, connect_timeout=10, timeout=30)
         if env == "uat":
             self.client.add_endpoint(region, UAT_ENDPOINT)
             log.info("Connected to Webull UAT (test environment)")
@@ -631,10 +636,13 @@ class Trader:
                 sells.append((symbol, current_w * effective_pv))
                 continue
 
+            # Bidirectional: a sharp drop should force an exit/trim sooner (bear case),
+            # and a sharp rise should let the position scale in sooner (bull case) —
+            # same mechanism, just not gated to one direction.
             conviction_flip = (
                 current_w > 0.0 and abs(delta) > 0.0
                 and symbol in prev_clf_prob and symbol in today_clf_prob
-                and (prev_clf_prob[symbol] - today_clf_prob[symbol]) >= CONVICTION_DROP_THRESHOLD
+                and abs(prev_clf_prob[symbol] - today_clf_prob[symbol]) >= CONVICTION_SHIFT_THRESHOLD
             )
             if abs(delta) <= REBALANCE_THRESHOLD and not conviction_flip:
                 continue  # within threshold, no trade needed
