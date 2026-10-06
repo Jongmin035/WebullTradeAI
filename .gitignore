@@ -23,6 +23,7 @@ venv/
 # Data & model artifacts
 src/data/
 *.csv
+!src/pipeline/sector_map.csv
 *.pkl
 *.h5
 

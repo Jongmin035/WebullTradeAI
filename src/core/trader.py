@@ -42,6 +42,7 @@ from metrics import kelly_fraction
 from safeguards import run_checks, check_stop_losses, update_position_highs
 from dashboard_logger import load_stats, log_rebalance
 from controls import load_commands, save_commands
+from sector_map import load_sector_map
 
 load_dotenv()
 
@@ -54,6 +55,7 @@ CLF_PROB_THRESHOLD     = 0.52  # minimum model confidence (kelly gate at >0.50; 
 MIN_POSITION_WEIGHT    = 0.03  # drop positions that would be < 3% of portfolio
 MAX_VENTURE_POSITIONS  = 10    # buy/target top-N venture stocks by Kelly score
 HOLD_ZONE_MAX_RANK     = 15    # keep held positions ranked up to this (reduces churn)
+MAX_SECTOR_WEIGHT      = 0.35  # cap any single GICS sector at this fraction of venture_pct
 
 SAFETY_ETFS = ["SPY"]           # filler in bull/sideways — neutral drag, better than defensive ETFs
 HEDGE_ETFS  = ["SH", "SQQQ"]   # short exposure in bear regime only
@@ -89,6 +91,59 @@ def _etf_bucket_weights(etf_list, predictions_today, bucket_pct):
 
     per_etf = bucket_pct / len(active)
     return {sym: per_etf for sym in active}
+
+
+def _apply_sector_cap(target, venture_pct):
+    """
+    Cap total weight in any single GICS sector at MAX_SECTOR_WEIGHT of venture_pct.
+    Excess is scaled down proportionally across that sector's positions (the
+    difference falls back to cash — it is simply not reassigned to target).
+
+    This is a risk-management overlay, not a core part of the rebalance — any
+    failure here (missing/corrupt sector_map.csv, etc.) is logged with the
+    full exception so it's diagnosable, but never blocks the rebalance itself.
+    """
+    try:
+        sector_map = load_sector_map()
+    except Exception as e:
+        log.warning(
+            f"Sector cap: could not load sector_map.csv ({type(e).__name__}: {e}) "
+            f"— proceeding without sector cap this rebalance",
+            exc_info=True,
+        )
+        return target
+
+    try:
+        sector_totals = {}
+        unmapped = []
+        for sym, w in target.items():
+            sector = sector_map.get(sym)
+            if sector is None:
+                unmapped.append(sym)
+                continue
+            if sector == "ETF":
+                continue  # safety/hedge bucket ETFs aren't subject to the venture sector cap
+            sector_totals[sector] = sector_totals.get(sector, 0.0) + w
+
+        if unmapped:
+            log.info(f"Sector cap: no sector mapping for {unmapped} — not capped")
+
+        cap = MAX_SECTOR_WEIGHT * venture_pct
+        for sector, total in sector_totals.items():
+            if total > cap > 0:
+                scale = cap / total
+                for sym in target:
+                    if sector_map.get(sym) == sector:
+                        target[sym] = round(target[sym] * scale, 4)
+                log.info(f"Sector cap: {sector} was {total:.1%} of portfolio, scaled to {cap:.1%}")
+    except Exception as e:
+        log.warning(
+            f"Sector cap check failed — {type(e).__name__}: {e} "
+            f"— proceeding without sector cap this rebalance",
+            exc_info=True,
+        )
+
+    return target
 
 
 class Trader:
@@ -382,6 +437,8 @@ class Trader:
                 sym = row["symbol"]
                 if sym in held:
                     target[sym] = held[sym]
+
+        target = _apply_sector_cap(target, venture_pct)
 
         if safety_pct > 0:
             target.update(_etf_bucket_weights(SAFETY_ETFS, predictions_today, safety_pct))
