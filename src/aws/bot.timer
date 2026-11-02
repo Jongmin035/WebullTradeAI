@@ -3,8 +3,10 @@ Description=Run WebullTradeAI bot daily at midday
 After=config-pull.service
 
 [Timer]
-# 11:00 AM ET = 8:00 AM PT = 15:00 UTC
-OnCalendar=Mon..Fri 15:00:00 UTC
+# 11:00 AM ET, every weekday. Timezone suffix makes systemd track ET's own
+# clock (EDT/EST) the same way the exchange does, instead of a fixed UTC
+# offset that silently drifts an hour at each DST transition.
+OnCalendar=Mon..Fri 11:00:00 America/New_York
 AccuracySec=60
 Persistent=true
 

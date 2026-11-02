@@ -2,9 +2,10 @@
 Description=Run WebullTradeAI weekly model retrain every Sunday night
 
 [Timer]
-# Saturday 12:00 UTC = 8:00 AM ET = 5:00 AM PT
-# Retrain takes ~3-4 hrs on g5.xlarge — done well before Sunday
-OnCalendar=Sat 12:00:00 UTC
+# 8:00 AM ET, Saturday. Timezone suffix makes systemd track ET's own clock
+# (EDT/EST) instead of a fixed UTC offset that drifts an hour at each DST
+# transition. Retrain takes ~3-4 hrs on g5.xlarge — done well before Sunday.
+OnCalendar=Sat 08:00:00 America/New_York
 AccuracySec=60
 # Fire immediately if EC2 booted after the scheduled time (e.g. EventBridge delay).
 Persistent=true
