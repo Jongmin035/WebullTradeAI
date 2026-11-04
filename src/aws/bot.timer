@@ -8,7 +8,16 @@ After=config-pull.service
 # offset that silently drifts an hour at each DST transition.
 OnCalendar=Mon..Fri 11:00:00 America/New_York
 AccuracySec=60
-Persistent=true
+# No Persistent=true: with this instance fully powered off between runs, a
+# persistent timer fires immediately on every boot/activation (confirmed via
+# SSM -- LastTriggerUSec never lands exactly on 11:00:00, so every later
+# activation, including an unrelated manual instance start, sees "today's
+# slot" as still unfulfilled and re-fires bot.service). The instance reliably
+# boots ~12-14 min before 11:00 (EventBridge start + config-pull finish well
+# inside that window), so a plain non-persistent timer just waits for the
+# exact scheduled moment -- correct behavior, no catch-up needed. Trade-off:
+# if boot ever takes longer than that buffer, that day's run is silently
+# skipped rather than fired late.
 
 [Install]
 WantedBy=timers.target

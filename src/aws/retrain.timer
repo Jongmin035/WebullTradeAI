@@ -7,8 +7,13 @@ Description=Run WebullTradeAI weekly model retrain every Sunday night
 # transition. Retrain takes ~3-4 hrs on g5.xlarge — done well before Sunday.
 OnCalendar=Sat 08:00:00 America/New_York
 AccuracySec=60
-# Fire immediately if EC2 booted after the scheduled time (e.g. EventBridge delay).
-Persistent=true
+# No Persistent=true: with this instance fully powered off between runs, a
+# persistent timer fires immediately on every boot/activation instead of
+# waiting for the exact scheduled moment (confirmed on bot.timer via SSM --
+# same mechanism applies here). EventBridge starts the instance with enough
+# buffer before 8:00 AM for config-pull to finish, so a plain non-persistent
+# timer correctly waits and fires exactly on time. Trade-off: an unusually
+# slow boot would skip that week's retrain rather than fire it late.
 
 [Install]
 WantedBy=timers.target
