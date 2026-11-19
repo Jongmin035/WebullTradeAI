@@ -39,7 +39,7 @@ for d in (SRC_DIR, os.path.join(SRC_DIR, "core"), os.path.join(SRC_DIR, "pipelin
 load_dotenv(dotenv_path=os.path.join(ROOT_DIR, ".env"))
 
 from data_pipeline import load_all_symbols, fetch_sp500_symbols, ETF_SYMBOLS, INDICATORS_DIR
-from sentiment import download_from_s3 as download_sentiment, update_all as update_sentiment
+from sentiment import download_from_s3 as download_sentiment, update_all as update_sentiment, upload_to_s3 as upload_sentiment
 from backtest import run_backtest
 from regime_pipeline import fetch_spy_regimes, FEATURES
 from model_store import (
@@ -524,6 +524,10 @@ if __name__ == "__main__":
         log.info("\n--- Refreshing sentiment data ---")
         download_sentiment()
         update_sentiment(symbols)
+        try:
+            upload_sentiment(symbols)
+        except Exception as e:
+            log.warning(f"Sentiment S3 upload failed: {e} — local data is still fresh, continuing.")
         rlog.end_step()
 
         # 3. Load datasets
