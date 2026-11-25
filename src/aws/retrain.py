@@ -562,6 +562,27 @@ if __name__ == "__main__":
         sortinos = {"lstm": round(lstm_metrics.get("sortino", 0.0), 4)}
         winner   = "lstm"
         log.info(f"LSTM Sortino: {sortinos['lstm']:.4f}  Sharpe: {lstm_metrics.get('sharpe', 0.0):.4f}")
+
+        # Persist the day-level backtest breakdown and per-symbol predictions --
+        # previously computed fresh every week and discarded, which is why a
+        # multi-week Sharpe/Sortino decline couldn't be diagnosed after the fact.
+        # Non-critical: never block the retrain over an upload failure.
+        try:
+            import boto3
+            today_str   = datetime.now().strftime("%Y-%m-%d")
+            results_df  = lstm_metrics.get("results_df")
+            if results_df is not None:
+                _s3 = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"))
+                results_df.to_csv(f"/tmp/{today_str}-eval-results.csv", index=False)
+                lstm_preds.to_parquet(f"/tmp/{today_str}-eval-predictions.parquet", index=False)
+                _s3.upload_file(f"/tmp/{today_str}-eval-results.csv", bucket,
+                                 f"retrain/eval/{today_str}-results.csv")
+                _s3.upload_file(f"/tmp/{today_str}-eval-predictions.parquet", bucket,
+                                 f"retrain/eval/{today_str}-predictions.parquet")
+                log.info(f"Uploaded eval breakdown to s3://{bucket}/retrain/eval/{today_str}-*")
+        except Exception as e:
+            log.warning(f"Could not upload eval breakdown: {e}")
+
         rlog.end_step(winner=winner, sortino=sortinos["lstm"], sharpe=lstm_metrics.get("sharpe", 0.0))
 
         # 6. Train final LSTM
