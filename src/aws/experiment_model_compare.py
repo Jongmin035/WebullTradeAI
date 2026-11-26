@@ -58,16 +58,22 @@ from retrain import (
 BUCKET = os.getenv("AWS_S3_BUCKET", "webull-trade-ai")
 
 
+RANDOM_STATE = 42  # same reasoning as retrain.TRAIN_SEED -- makes repeat/comparison runs
+                    # reproducible instead of confounding real effects with run-to-run noise
+
+
 def _fit_predict_lightgbm(X_tr, y_tr, X_te, task):
     import lightgbm as lgb
     if task == "clf":
         model = lgb.LGBMClassifier(n_estimators=300, learning_rate=0.05, num_leaves=31,
-                                    subsample=0.8, colsample_bytree=0.8, verbosity=-1)
+                                    subsample=0.8, colsample_bytree=0.8, verbosity=-1,
+                                    random_state=RANDOM_STATE)
         model.fit(X_tr, y_tr)
         return model.predict_proba(X_te)[:, 1]
     else:
         model = lgb.LGBMRegressor(n_estimators=300, learning_rate=0.05, num_leaves=31,
-                                   subsample=0.8, colsample_bytree=0.8, verbosity=-1)
+                                   subsample=0.8, colsample_bytree=0.8, verbosity=-1,
+                                   random_state=RANDOM_STATE)
         model.fit(X_tr, y_tr)
         return model.predict(X_te)
 
@@ -84,11 +90,11 @@ def _fit_predict_elasticnet(X_tr, y_tr, X_te, task):
 
     if task == "clf":
         model = LogisticRegression(penalty="elasticnet", solver="saga", l1_ratio=0.5,
-                                    C=1.0, max_iter=2000)
+                                    C=1.0, max_iter=2000, random_state=RANDOM_STATE)
         model.fit(X_tr_s, y_tr)
         return model.predict_proba(X_te_s)[:, 1]
     else:
-        model = ElasticNet(alpha=0.01, l1_ratio=0.5, max_iter=5000)
+        model = ElasticNet(alpha=0.01, l1_ratio=0.5, max_iter=5000, random_state=RANDOM_STATE)
         model.fit(X_tr_s, y_tr)
         return model.predict(X_te_s)
 

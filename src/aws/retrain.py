@@ -157,6 +157,12 @@ NUM_WORKERS           = 4
 PATIENCE              = 10
 MAX_EPOCHS            = 200
 LSTM_TRAIN_WINDOW     = 36   # months; caps LSTM training data to avoid OOM on 500 symbols
+TRAIN_SEED            = 42  # fixed seed for LSTM init/shuffling -- without this, re-running the
+                             # exact same config can swing Sharpe several-fold on randomness alone
+                             # (confirmed directly: a horizon=5 repeat run went 0.43 -> 1.70 Sharpe
+                             # with nothing else changed). Doesn't make any single run "more correct",
+                             # but makes two configs comparable without that noise as a confound, and
+                             # makes production's own eval reproducible run to run.
 DEVICE           = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
@@ -302,6 +308,9 @@ def _make_sequences(df):
 
 
 def _train_lstm(X_train, y_train, df_train_flat, task="clf"):
+    torch.manual_seed(TRAIN_SEED)
+    np.random.seed(TRAIN_SEED)
+
     scaler = StandardScaler()
     scaler.fit(df_train_flat[FEATURES].values)
 
