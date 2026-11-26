@@ -64,16 +64,22 @@ RANDOM_STATE = 42  # same reasoning as retrain.TRAIN_SEED -- makes repeat/compar
 
 def _fit_predict_lightgbm(X_tr, y_tr, X_te, task):
     import lightgbm as lgb
+    # First attempt (num_leaves=31, default min_child_samples=20) produced
+    # clf_prob clustered tightly around the base rate (mean 0.57, std 0.068,
+    # 82% of rows passing both candidate filters) -- too conservative/
+    # averaging to discriminate between stocks, not an honest reflection of
+    # weak-but-real signal. More leaves + a lower min_child_samples lets the
+    # model carve out sharper, more specific splits instead of regressing
+    # everything toward the mean.
+    common = dict(n_estimators=300, learning_rate=0.05, num_leaves=63,
+                   min_child_samples=10, subsample=0.8, colsample_bytree=0.8,
+                   verbosity=-1, random_state=RANDOM_STATE)
     if task == "clf":
-        model = lgb.LGBMClassifier(n_estimators=300, learning_rate=0.05, num_leaves=31,
-                                    subsample=0.8, colsample_bytree=0.8, verbosity=-1,
-                                    random_state=RANDOM_STATE)
+        model = lgb.LGBMClassifier(**common)
         model.fit(X_tr, y_tr)
         return model.predict_proba(X_te)[:, 1]
     else:
-        model = lgb.LGBMRegressor(n_estimators=300, learning_rate=0.05, num_leaves=31,
-                                   subsample=0.8, colsample_bytree=0.8, verbosity=-1,
-                                   random_state=RANDOM_STATE)
+        model = lgb.LGBMRegressor(**common)
         model.fit(X_tr, y_tr)
         return model.predict(X_te)
 
