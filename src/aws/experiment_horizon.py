@@ -175,6 +175,7 @@ if __name__ == "__main__":
     parser.add_argument("--horizon", type=int, default=10, help="Forward-looking label horizon in trading days (default 10)")
     parser.add_argument("--min-hold-days", type=int, default=10, help="Minimum days before a routine model-driven sell applies (0 = original behavior)")
     parser.add_argument("--stop-loss-pct", type=float, default=0.08, help="Price-based stop-loss override, as a fraction (default 0.08 = 8%%, matching live ATR_FALLBACK)")
+    parser.add_argument("--tag", default="", help="Extra suffix for the S3 result tag, so a repeat run doesn't overwrite a prior one on the same day")
     args = parser.parse_args()
 
     print(f"=== Horizon experiment: horizon={args.horizon}  min_hold_days={args.min_hold_days}  stop_loss_pct={args.stop_loss_pct} ===")
@@ -204,7 +205,8 @@ if __name__ == "__main__":
           f"CumReturn={metrics['cumulative_return']:.2%}  WinRate={metrics['win_rate']:.2%}")
 
     today_str = datetime.now().strftime("%Y-%m-%d")
-    tag = f"experiment-h{args.horizon}-mh{args.min_hold_days}-{today_str}"
+    tag_suffix = f"-{args.tag}" if args.tag else ""
+    tag = f"experiment-h{args.horizon}-mh{args.min_hold_days}-{today_str}{tag_suffix}"
     try:
         import boto3
         s3 = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"))
