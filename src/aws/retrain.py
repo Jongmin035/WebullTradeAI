@@ -307,9 +307,9 @@ def _make_sequences(df):
     )
 
 
-def _train_lstm(X_train, y_train, df_train_flat, task="clf"):
-    torch.manual_seed(TRAIN_SEED)
-    np.random.seed(TRAIN_SEED)
+def _train_lstm(X_train, y_train, df_train_flat, task="clf", seed=TRAIN_SEED):
+    torch.manual_seed(seed)
+    np.random.seed(seed)
 
     scaler = StandardScaler()
     scaler.fit(df_train_flat[FEATURES].values)
