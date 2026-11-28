@@ -64,23 +64,29 @@ RANDOM_STATE = 42  # same reasoning as retrain.TRAIN_SEED -- makes repeat/compar
 
 def _fit_predict_lightgbm(X_tr, y_tr, X_te, task):
     import lightgbm as lgb
-    # First attempt (num_leaves=31, default min_child_samples=20) produced
-    # clf_prob clustered tightly around the base rate (mean 0.57, std 0.068,
-    # 82% of rows passing both candidate filters) -- too conservative/
-    # averaging to discriminate between stocks, not an honest reflection of
-    # weak-but-real signal. More leaves + a lower min_child_samples lets the
-    # model carve out sharper, more specific splits instead of regressing
-    # everything toward the mean.
-    common = dict(n_estimators=300, learning_rate=0.05, num_leaves=63,
+    # num_leaves 31->63 + min_child_samples 20->10 (previous attempt) barely
+    # moved the real clf_prob std (0.068->0.077) despite looking much better
+    # on synthetic data. A local diagnostic on real predictions showed the
+    # per-stock signal is weak-but-real (AUC 0.513, monotonic by decile) --
+    # leaf structure wasn't the bottleneck. A fixed n_estimators=300 has no
+    # way to know if a given month's walk-forward refit is over- or under-fit;
+    # early stopping against a chronological (not random, to avoid lookahead)
+    # validation tail picks the iteration count honestly instead.
+    n_val = max(1, int(len(X_tr) * 0.15))
+    X_tr_fit, X_val = X_tr[:-n_val], X_tr[-n_val:]
+    y_tr_fit, y_val = y_tr[:-n_val], y_tr[-n_val:]
+
+    common = dict(n_estimators=1000, learning_rate=0.03, num_leaves=63,
                    min_child_samples=10, subsample=0.8, colsample_bytree=0.8,
                    verbosity=-1, random_state=RANDOM_STATE)
+    callbacks = [lgb.early_stopping(stopping_rounds=30, verbose=False)]
     if task == "clf":
         model = lgb.LGBMClassifier(**common)
-        model.fit(X_tr, y_tr)
+        model.fit(X_tr_fit, y_tr_fit, eval_set=[(X_val, y_val)], callbacks=callbacks)
         return model.predict_proba(X_te)[:, 1]
     else:
         model = lgb.LGBMRegressor(**common)
-        model.fit(X_tr, y_tr)
+        model.fit(X_tr_fit, y_tr_fit, eval_set=[(X_val, y_val)], callbacks=callbacks)
         return model.predict(X_te)
 
 
